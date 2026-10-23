@@ -1,15 +1,22 @@
 import {
+  ASSUMPTION_REFERENCES,
+  DEFAULT_VERDICT_BANDS,
   PRESET_SCENARIOS,
   UNIT_METADATA,
+  convertUnitScale,
   evaluateAsk,
   formatMoney,
   formatMonthlyMoney,
   formatMultiple,
   formatPercent,
+  solveGoalSeek,
   type CheckOutput,
+  type CurrencyUnit,
+  type GoalSeekTarget,
   type TracedMetric,
   type ValidationField,
 } from '../engine';
+import { generateMarkdownSummary } from './export';
 import { syncStateToUrl, type AppState } from './state';
 
 function escapeHtml(str: string): string {
@@ -81,10 +88,25 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       ...initialState.input,
       verdictBands: { ...initialState.input.verdictBands },
     },
+    goalSeekTarget: initialState.goalSeekTarget,
+    goalSeekGrowth: initialState.goalSeekGrowth,
   };
 
   const openTraces = new Set<string>();
   let themeMode: 'system' | 'light' | 'dark' = 'system';
+
+  const assumptionsRowsHtml = ASSUMPTION_REFERENCES.map((item) => {
+    const isOurAssumption = item.origin === 'Our Assumption';
+    const badgeClass = isOurAssumption ? 'badge badge-assumption' : 'badge';
+    return `
+      <tr>
+        <td><strong>${escapeHtml(item.parameter)}</strong></td>
+        <td><code>${escapeHtml(item.defaultValue)}</code></td>
+        <td><span class="${badgeClass}">${escapeHtml(item.origin)}</span></td>
+        <td>${escapeHtml(item.explanation)}</td>
+      </tr>
+    `;
+  }).join('');
 
   root.innerHTML = `
     <div class="wrap">
@@ -95,6 +117,15 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
           <span>Pareto’s Edge · Incrementally Original</span>
         </div>
         <div class="header-actions">
+          <button type="button" id="copy-link-btn" class="icon-btn" aria-label="Copy shareable scenario link">
+            Copy Link
+          </button>
+          <button type="button" id="copy-md-btn" class="icon-btn" aria-label="Copy summary as Markdown">
+            Copy Markdown
+          </button>
+          <button type="button" id="print-btn" class="icon-btn" aria-label="Print or save as PDF">
+            Print / PDF
+          </button>
           <button type="button" id="theme-toggle" class="icon-btn" aria-label="Toggle color theme">
             Theme: Auto
           </button>
@@ -112,10 +143,22 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         </p>
       </header>
 
-      <section class="presets-bar" aria-label="Worked examples from the article">
-        <div class="presets" id="presets" role="group" aria-label="Examples"></div>
-        <p id="pnote" class="preset-note" hidden></p>
-      </section>
+      <div class="toolbar-row">
+        <section class="presets-bar" aria-label="Worked examples from the article" style="flex: 1; min-width: 260px;">
+          <div class="presets" id="presets" role="group" aria-label="Examples"></div>
+        </section>
+
+        <div class="action-group" role="group" aria-label="Currency and unit selection">
+          <span style="font-size: 12.5px; font-weight: 600; color: var(--muted);">Units:</span>
+          <div class="segmented" id="unit-switcher">
+            <button type="button" data-unit="INR_CR" aria-pressed="true">₹ Cr</button>
+            <button type="button" data-unit="INR_LAKH" aria-pressed="false">₹ Lakh</button>
+            <button type="button" data-unit="USD_M" aria-pressed="false">USD ($M)</button>
+          </div>
+        </div>
+      </div>
+
+      <p id="pnote" class="preset-note" hidden></p>
 
       <div class="cols">
         <section class="card" aria-label="Inputs">
@@ -221,7 +264,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         <section class="card" aria-label="Results" aria-live="polite" id="results-panel">
           <div class="card-header">
             <p class="eyebrow">What your ask signals</p>
-            <span class="badge badge-assumption" title="Reachable ≤ 3x, Stretch ≤ 5x, Stiff > 5x growth in 15–18 months">Verdict bands: ≤3x / ≤5x (our assumption)</span>
+            <span class="badge badge-assumption" id="verdict-band-badge">Verdict bands: ≤3x / ≤5x (our assumption)</span>
           </div>
 
           <div class="verdict-box" id="verdict-box">
@@ -235,6 +278,36 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
           </div>
 
           <div class="tiles" id="tiles"></div>
+
+          <!-- Step 3: Integrated Goal-Seek Mode -->
+          <div class="goalseek-section" aria-label="Goal-seek calculator">
+            <div class="card-header">
+              <p class="eyebrow">Your ask is a goal-seek</p>
+              <span class="badge">Backwards solver</span>
+            </div>
+
+            <div class="band-pills" id="band-pills"></div>
+
+            <div class="solver-controls">
+              <div class="field">
+                <label for="gs-target">Solve backwards for</label>
+                <select id="gs-target" class="solver-select">
+                  <option value="max_ask">Largest ask that clears growth ceiling</option>
+                  <option value="required_revenue">Current revenue needed for this ask</option>
+                  <option value="required_dilution">Dilution needed for this ask &amp; revenue</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="gs-growth">
+                  <span>Target max growth (x)</span>
+                  <span class="badge badge-assumption">Assumption</span>
+                </label>
+                <input id="gs-growth" type="number" step="0.1" min="0.5" max="50" inputmode="decimal" />
+              </div>
+            </div>
+
+            <div class="solver-output" id="gs-output"></div>
+          </div>
 
           <div class="chain-section">
             <p class="eyebrow">Valuation &amp; cap-table chain</p>
@@ -253,10 +326,66 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
           </div>
 
           <p class="sub" style="font-size: 13px;">
-            Rules of thumb from the source article: 20–25% early dilution (4–5x ask), next pre-money at least 2x this post-money in 15–18 months, and asks of 3–4x the previous priced raise. The growth verdict bands (≤3x Reachable, ≤5x Stretch, &gt;5x Stiff) are <strong>our assumption</strong> inferred from the article’s examples.
+            Rules of thumb from the source article: 20–25% early dilution (4–5x ask), next pre-money at least 2x this post-money in 15–18 months, and asks of 3–4x the previous priced raise. The growth verdict bands are <strong>our assumption</strong> inferred from the article’s examples and can be customised below.
           </p>
         </section>
       </div>
+
+      <!-- Step 4: Settings & Assumptions Reference -->
+      <details class="panel-drawer" id="settings-drawer">
+        <summary>
+          <span>Settings &amp; Verdict Band Thresholds</span>
+          <span class="badge badge-assumption">Configurable assumptions</span>
+        </summary>
+        <div class="drawer-content">
+          <div class="pair">
+            <div class="field">
+              <label for="band-reach">
+                <span>Reachable growth ceiling (x)</span>
+                <span class="badge badge-assumption">Our assumption</span>
+              </label>
+              <input id="band-reach" type="number" step="0.1" min="0.5" max="20" inputmode="decimal" />
+              <small>Growth at or below this multiple is marked Reachable (default 3.0x)</small>
+            </div>
+            <div class="field">
+              <label for="band-stretch">
+                <span>Stretch growth ceiling (x)</span>
+                <span class="badge badge-assumption">Our assumption</span>
+              </label>
+              <input id="band-stretch" type="number" step="0.1" min="1" max="50" inputmode="decimal" />
+              <small>Growth above this multiple is marked Stiff (default 5.0x)</small>
+              <div class="field-error" id="err-bands" hidden></div>
+            </div>
+          </div>
+          <div>
+            <button type="button" id="reset-bands-btn" class="icon-btn">Reset verdict bands to 3.0x / 5.0x</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="panel-drawer" id="assumptions-drawer">
+        <summary>
+          <span>All Defaults, Rules of Thumb &amp; Origins</span>
+          <span class="badge">Source Article vs. Our Assumptions</span>
+        </summary>
+        <div class="drawer-content">
+          <div class="scroll">
+            <table class="assumptions-table" aria-label="Defaults and origins reference">
+              <thead>
+                <tr>
+                  <th>Parameter / Rule</th>
+                  <th>Default</th>
+                  <th>Origin</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${assumptionsRowsHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
 
       <footer class="app-footer">
         <div class="footer-row">
@@ -282,9 +411,18 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   const monthsEl = root.querySelector<HTMLInputElement>('#months')!;
   const cashEl = root.querySelector<HTMLInputElement>('#cash')!;
   const esopEl = root.querySelector<HTMLInputElement>('#esop')!;
+  const gsTargetEl = root.querySelector<HTMLSelectElement>('#gs-target')!;
+  const gsGrowthEl = root.querySelector<HTMLInputElement>('#gs-growth')!;
+  const bandReachEl = root.querySelector<HTMLInputElement>('#band-reach')!;
+  const bandStretchEl = root.querySelector<HTMLInputElement>('#band-stretch')!;
+  const resetBandsBtn = root.querySelector<HTMLButtonElement>('#reset-bands-btn')!;
   const presetsBox = root.querySelector<HTMLElement>('#presets')!;
   const presetNoteEl = root.querySelector<HTMLElement>('#pnote')!;
+  const unitSwitcher = root.querySelector<HTMLElement>('#unit-switcher')!;
   const themeBtn = root.querySelector<HTMLButtonElement>('#theme-toggle')!;
+  const copyLinkBtn = root.querySelector<HTMLButtonElement>('#copy-link-btn')!;
+  const copyMdBtn = root.querySelector<HTMLButtonElement>('#copy-md-btn')!;
+  const printBtn = root.querySelector<HTMLButtonElement>('#print-btn')!;
 
   // Track open/close of <details class="trace">
   root.addEventListener(
@@ -319,6 +457,72 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     }
   });
 
+  // Share & Export actions
+  copyLinkBtn.addEventListener('click', async () => {
+    syncStateToUrl(state);
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      copyLinkBtn.textContent = 'Link Copied!';
+      setTimeout(() => {
+        copyLinkBtn.textContent = 'Copy Link';
+      }, 1800);
+    } catch {
+      copyLinkBtn.textContent = 'URL in address bar';
+    }
+  });
+
+  copyMdBtn.addEventListener('click', async () => {
+    const md = generateMarkdownSummary(
+      state.input,
+      state.unit,
+      state.goalSeekTarget,
+      state.goalSeekGrowth
+    );
+    try {
+      await navigator.clipboard.writeText(md);
+      copyMdBtn.textContent = 'Markdown Copied!';
+      setTimeout(() => {
+        copyMdBtn.textContent = 'Copy Markdown';
+      }, 1800);
+    } catch {
+      copyMdBtn.textContent = 'Copy failed';
+    }
+  });
+
+  printBtn.addEventListener('click', () => {
+    window.print();
+  });
+
+  // Unit switcher
+  unitSwitcher.querySelectorAll<HTMLButtonElement>('button[data-unit]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const nextUnit = btn.dataset.unit as CurrencyUnit;
+      if (nextUnit === state.unit) return;
+      const prevUnit = state.unit;
+      state.unit = nextUnit;
+
+      // Scale monetary inputs if switching between ₹ Cr and ₹ Lakh
+      if (
+        (prevUnit === 'INR_CR' && nextUnit === 'INR_LAKH') ||
+        (prevUnit === 'INR_LAKH' && nextUnit === 'INR_CR')
+      ) {
+        state.input.ask = convertUnitScale(state.input.ask, prevUnit, nextUnit);
+        state.input.annualRevenue = convertUnitScale(
+          state.input.annualRevenue,
+          prevUnit,
+          nextUnit
+        );
+        state.input.priorRaise = convertUnitScale(state.input.priorRaise, prevUnit, nextUnit);
+        state.input.cashNeeded = convertUnitScale(state.input.cashNeeded, prevUnit, nextUnit);
+      } else {
+        state.activePresetId = null;
+      }
+
+      populateInputsFromState();
+      updateUI();
+    });
+  });
+
   // Render Preset Buttons
   PRESET_SCENARIOS.forEach((p) => {
     const btn = document.createElement('button');
@@ -339,7 +543,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     presetsBox.appendChild(btn);
   });
 
-  function populateInputsFromState(skipElement?: HTMLInputElement): void {
+  function populateInputsFromState(skipElement?: HTMLElement): void {
     const { input } = state;
     if (skipElement !== askEl) askEl.value = String(input.ask);
     if (skipElement !== dilEl) dilEl.value = String(input.dilutionPct);
@@ -357,6 +561,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     if (skipElement !== monthsEl) monthsEl.value = String(input.monthsToNextRound);
     if (skipElement !== cashEl) cashEl.value = String(input.cashNeeded);
     if (skipElement !== esopEl) esopEl.value = String(input.esopTopUpPct);
+    if (skipElement !== gsTargetEl) gsTargetEl.value = state.goalSeekTarget;
+    if (skipElement !== gsGrowthEl) gsGrowthEl.value = String(state.goalSeekGrowth);
+    if (skipElement !== bandReachEl)
+      bandReachEl.value = String(input.verdictBands.reachableMax);
+    if (skipElement !== bandStretchEl)
+      bandStretchEl.value = String(input.verdictBands.stretchMax);
   }
 
   function readNumericInput(el: HTMLInputElement): number {
@@ -366,8 +576,15 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     return Number.isFinite(parsed) ? parsed : NaN;
   }
 
-  function handleInputChange(sourceEl: HTMLInputElement): void {
-    state.activePresetId = null;
+  function handleInputChange(sourceEl: HTMLElement): void {
+    if (
+      sourceEl !== gsTargetEl &&
+      sourceEl !== gsGrowthEl &&
+      sourceEl !== bandReachEl &&
+      sourceEl !== bandStretchEl
+    ) {
+      state.activePresetId = null;
+    }
 
     if (sourceEl === mrrEl) {
       const mrr = readNumericInput(mrrEl);
@@ -381,6 +598,16 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       if (Number.isFinite(arr)) {
         mrrEl.value = String(Number((arr / 12).toFixed(4)));
       }
+    } else if (sourceEl === gsTargetEl) {
+      state.goalSeekTarget = gsTargetEl.value as GoalSeekTarget;
+    } else if (sourceEl === gsGrowthEl) {
+      const g = readNumericInput(gsGrowthEl);
+      if (Number.isFinite(g) && g > 0) {
+        state.goalSeekGrowth = g;
+      }
+    } else if (sourceEl === bandReachEl || sourceEl === bandStretchEl) {
+      state.input.verdictBands.reachableMax = readNumericInput(bandReachEl);
+      state.input.verdictBands.stretchMax = readNumericInput(bandStretchEl);
     } else {
       state.input.ask = readNumericInput(askEl);
       state.input.dilutionPct = readNumericInput(dilEl);
@@ -396,15 +623,37 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     updateUI();
   }
 
-  [askEl, dilEl, mrrEl, revEl, priorEl, stepEl, multEl, monthsEl, cashEl, esopEl].forEach(
-    (el) => {
-      el.addEventListener('input', () => handleInputChange(el));
-    }
-  );
+  [
+    askEl,
+    dilEl,
+    mrrEl,
+    revEl,
+    priorEl,
+    stepEl,
+    multEl,
+    monthsEl,
+    cashEl,
+    esopEl,
+    gsGrowthEl,
+    bandReachEl,
+    bandStretchEl,
+  ].forEach((el) => {
+    el.addEventListener('input', () => handleInputChange(el));
+  });
   pricedEl.addEventListener('change', () => handleInputChange(pricedEl));
+  gsTargetEl.addEventListener('change', () => handleInputChange(gsTargetEl));
+
+  resetBandsBtn.addEventListener('click', () => {
+    state.input.verdictBands = { ...DEFAULT_VERDICT_BANDS };
+    state.goalSeekGrowth = DEFAULT_VERDICT_BANDS.reachableMax;
+    populateInputsFromState();
+    updateUI();
+  });
 
   function renderValidationErrors(output: CheckOutput): void {
-    const fieldErrorMap: Partial<Record<ValidationField, { input: HTMLInputElement; errEl: HTMLElement }>> = {
+    const fieldErrorMap: Partial<
+      Record<ValidationField, { input: HTMLInputElement; errEl: HTMLElement }>
+    > = {
       ask: { input: askEl, errEl: root.querySelector('#err-ask')! },
       dilutionPct: { input: dilEl, errEl: root.querySelector('#err-dil')! },
       annualRevenue: { input: revEl, errEl: root.querySelector('#err-rev')! },
@@ -415,6 +664,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       cashNeeded: { input: cashEl, errEl: root.querySelector('#err-cash')! },
       esopTopUpPct: { input: esopEl, errEl: root.querySelector('#err-esop')! },
       esopAndDilution: { input: esopEl, errEl: root.querySelector('#err-esop')! },
+      verdictBands: { input: bandStretchEl, errEl: root.querySelector('#err-bands')! },
     };
 
     Object.values(fieldErrorMap).forEach((entry) => {
@@ -442,6 +692,20 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     root.querySelector('#unit-banner-text')!.textContent =
       `All monetary amounts are in ${unitMeta.shortUnit}.`;
     root.querySelector('#unit-hint')!.textContent = `Amounts in ${unitMeta.shortUnit}`;
+    root.querySelector('#ask-unit-sub')!.textContent = `${unitMeta.shortUnit} intended raise`;
+    root.querySelector('#rev-sub')!.textContent = `${unitMeta.shortUnit} (monthly × 12)`;
+    root.querySelector('#prior-sub')!.textContent = `${unitMeta.shortUnit} (0 if none)`;
+    root.querySelector('#cash-sub')!.textContent =
+      `${unitMeta.shortUnit} from your burn plan (0 if unset)`;
+
+    // Update unit switcher active button
+    unitSwitcher.querySelectorAll<HTMLButtonElement>('button[data-unit]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', btn.dataset.unit === state.unit ? 'true' : 'false');
+    });
+
+    // Update verdict band badge
+    root.querySelector('#verdict-band-badge')!.textContent =
+      `Verdict bands: ≤${formatMultiple(state.input.verdictBands.reachableMax, 1)} / ≤${formatMultiple(state.input.verdictBands.stretchMax, 1)} (our assumption)`;
 
     // Update dynamic monthly helper caption
     const mrrSub = root.querySelector('#mrr-sub')!;
@@ -499,6 +763,90 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       renderTile(metrics.requiredGrowthMultiple, openTraces),
       renderTile(metrics.fundingGap, openTraces),
     ].join('');
+
+    // Render Goal-Seek Section
+    const bandPillsEl = root.querySelector<HTMLElement>('#band-pills')!;
+    const gsOutputEl = root.querySelector<HTMLElement>('#gs-output')!;
+    const seek = solveGoalSeek(
+      state.input,
+      state.goalSeekTarget,
+      state.goalSeekGrowth,
+      state.unit
+    );
+
+    const pills: string[] = [];
+    if (output.validation.valid && state.input.annualRevenue > 0) {
+      pills.push(`
+        <div class="band-pill" data-band="reachable">
+          <span class="bl">Max Ask for Reachable (≤${escapeHtml(formatMultiple(state.input.verdictBands.reachableMax, 1))})</span>
+          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.reachableAsk, state.unit))}</span>
+        </div>
+      `);
+      pills.push(`
+        <div class="band-pill" data-band="stretch">
+          <span class="bl">Max Ask for Stretch (≤${escapeHtml(formatMultiple(state.input.verdictBands.stretchMax, 1))})</span>
+          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.stretchAsk, state.unit))}</span>
+        </div>
+      `);
+    }
+    if (output.feasibleAskBand.priorRaiseBand) {
+      pills.push(`
+        <div class="band-pill" data-band="prior">
+          <span class="bl">3–4x Priced Prior Raise Band</span>
+          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.priorRaiseBand[0], state.unit))} – ${escapeHtml(formatMoney(output.feasibleAskBand.priorRaiseBand[1], state.unit))}</span>
+        </div>
+      `);
+    }
+    bandPillsEl.innerHTML = pills.join('');
+
+    const canApplyGoalSeek = seek.isFeasible && seek.solvedValue !== null;
+    gsOutputEl.innerHTML = `
+      <div class="solver-result-row">
+        <div class="solver-hero">
+          <span class="sv">${escapeHtml(seek.formattedSolvedValue)}</span>
+          ${
+            seek.secondaryFormattedValue
+              ? `<span class="ss">(${escapeHtml(seek.secondaryFormattedValue)})</span>`
+              : ''
+          }
+        </div>
+        ${
+          canApplyGoalSeek
+            ? `<button type="button" id="apply-goalseek-btn" class="btn-primary">Apply to inputs</button>`
+            : ''
+        }
+      </div>
+      <p style="margin: 0; font-size: 13.5px; color: var(--ink);">${escapeHtml(seek.summary)}</p>
+      ${
+        seek.formula
+          ? renderTraceDetails(
+              'goalseek_trace',
+              seek.formula,
+              seek.calculation,
+              true,
+              `Backwards goal-seek at ≤${formatMultiple(seek.targetGrowthMultiple, 1)} target growth`,
+              openTraces
+            )
+          : ''
+      }
+    `;
+
+    const applyBtn = gsOutputEl.querySelector<HTMLButtonElement>('#apply-goalseek-btn');
+    if (applyBtn && seek.solvedValue !== null) {
+      applyBtn.addEventListener('click', () => {
+        state.activePresetId = null;
+        const val = Number(seek.solvedValue!.toFixed(2));
+        if (state.goalSeekTarget === 'max_ask') {
+          state.input.ask = val;
+        } else if (state.goalSeekTarget === 'required_revenue') {
+          state.input.annualRevenue = val;
+        } else if (state.goalSeekTarget === 'required_dilution') {
+          state.input.dilutionPct = Number(seek.solvedValue!.toFixed(1));
+        }
+        populateInputsFromState();
+        updateUI();
+      });
+    }
 
     // Render Valuation & Cap-Table Chain with expandable traces
     const chainEl = root.querySelector<HTMLElement>('#chain')!;

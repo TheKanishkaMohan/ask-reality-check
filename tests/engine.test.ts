@@ -234,3 +234,37 @@ describe('Ask Reality Check Engine — Goal-Seek Mode & Unit Formatting', () => 
     expect(convertUnitScale(75, 'INR_LAKH', 'INR_CR')).toBe(0.75);
   });
 });
+
+import { generateMarkdownSummary } from '../src/ui/export';
+import { buildQueryString } from '../src/ui/state';
+
+describe('Share & Export — Markdown Summary and URL State Serialization', () => {
+  it('generates a complete Markdown summary including verdict, metrics, and goal-seek', () => {
+    const presetB = PRESET_SCENARIOS.find((p) => p.id === 'b')!;
+    const md = generateMarkdownSummary(presetB.input, 'INR_CR', 'max_ask', 3.0);
+
+    expect(md).toContain('# Ask Reality Check — Summary (₹ Cr)');
+    expect(md).toContain('Reachable: 2.8x revenue growth needed in 18 months');
+    expect(md).toContain('₹100 Cr');
+    expect(md).toContain('₹80 Cr');
+    expect(md).toContain('Goal-Seek & Feasible Ask Band');
+  });
+
+  it('serializes state into compact URL query parameters', () => {
+    const presetA = PRESET_SCENARIOS.find((p) => p.id === 'a')!;
+    const qs = buildQueryString({
+      unit: 'USD_M',
+      activePresetId: null,
+      input: { ...presetA.input, ask: 5, priorRaise: 1.5, priorRaiseWasPriced: false },
+      goalSeekTarget: 'required_revenue',
+      goalSeekGrowth: 3.5,
+    });
+
+    expect(qs).toContain('u=USD_M');
+    expect(qs).toContain('ask=5');
+    expect(qs).toContain('prior=1.5');
+    expect(qs).toContain('priced=0');
+    expect(qs).toContain('gst=required_revenue');
+    expect(qs).toContain('gsg=3.5');
+  });
+});

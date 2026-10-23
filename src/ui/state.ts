@@ -3,12 +3,15 @@ import {
   PRESET_SCENARIOS,
   type CheckInput,
   type CurrencyUnit,
+  type GoalSeekTarget,
 } from '../engine';
 
 export interface AppState {
   unit: CurrencyUnit;
   activePresetId: string | null;
   input: CheckInput;
+  goalSeekTarget: GoalSeekTarget;
+  goalSeekGrowth: number;
 }
 
 const PARAM_MAP = {
@@ -26,6 +29,8 @@ const PARAM_MAP = {
   esopTopUpPct: 'esop',
   reachableMax: 'rmax',
   stretchMax: 'smax',
+  goalSeekTarget: 'gst',
+  goalSeekGrowth: 'gsg',
 } as const;
 
 export function getInitialState(): AppState {
@@ -40,6 +45,8 @@ export function getInitialState(): AppState {
       unit: defaultPreset.unit,
       activePresetId: defaultPreset.id,
       input: baseInput,
+      goalSeekTarget: 'max_ask',
+      goalSeekGrowth: DEFAULT_VERDICT_BANDS.reachableMax,
     };
   }
 
@@ -49,6 +56,8 @@ export function getInitialState(): AppState {
       unit: defaultPreset.unit,
       activePresetId: defaultPreset.id,
       input: baseInput,
+      goalSeekTarget: 'max_ask',
+      goalSeekGrowth: DEFAULT_VERDICT_BANDS.reachableMax,
     };
   }
 
@@ -77,6 +86,16 @@ export function getInitialState(): AppState {
         ? true
         : seed.priorRaiseWasPriced;
 
+  const gstRaw = params.get(PARAM_MAP.goalSeekTarget);
+  const goalSeekTarget: GoalSeekTarget =
+    gstRaw === 'max_ask' || gstRaw === 'required_revenue' || gstRaw === 'required_dilution'
+      ? gstRaw
+      : 'max_ask';
+
+  const reachableMax = parseNum(PARAM_MAP.reachableMax, seed.verdictBands.reachableMax);
+  const stretchMax = parseNum(PARAM_MAP.stretchMax, seed.verdictBands.stretchMax);
+  const goalSeekGrowth = parseNum(PARAM_MAP.goalSeekGrowth, reachableMax);
+
   const input: CheckInput = {
     ask: parseNum(PARAM_MAP.ask, seed.ask),
     dilutionPct: parseNum(PARAM_MAP.dilutionPct, seed.dilutionPct),
@@ -89,12 +108,11 @@ export function getInitialState(): AppState {
     cashNeeded: parseNum(PARAM_MAP.cashNeeded, seed.cashNeeded),
     esopTopUpPct: parseNum(PARAM_MAP.esopTopUpPct, seed.esopTopUpPct),
     verdictBands: {
-      reachableMax: parseNum(PARAM_MAP.reachableMax, seed.verdictBands.reachableMax),
-      stretchMax: parseNum(PARAM_MAP.stretchMax, seed.verdictBands.stretchMax),
+      reachableMax,
+      stretchMax,
     },
   };
 
-  // Detect if input still matches the preset
   const stillMatchesPreset =
     matchedPreset &&
     unit === matchedPreset.unit &&
@@ -112,6 +130,8 @@ export function getInitialState(): AppState {
     unit,
     activePresetId: stillMatchesPreset ? matchedPreset.id : null,
     input,
+    goalSeekTarget,
+    goalSeekGrowth,
   };
 }
 
@@ -146,6 +166,12 @@ export function buildQueryString(state: AppState): string {
   }
   if (state.input.verdictBands.stretchMax !== DEFAULT_VERDICT_BANDS.stretchMax) {
     params.set(PARAM_MAP.stretchMax, String(state.input.verdictBands.stretchMax));
+  }
+  if (state.goalSeekTarget !== 'max_ask') {
+    params.set(PARAM_MAP.goalSeekTarget, state.goalSeekTarget);
+  }
+  if (state.goalSeekGrowth !== state.input.verdictBands.reachableMax) {
+    params.set(PARAM_MAP.goalSeekGrowth, String(state.goalSeekGrowth));
   }
   return params.toString();
 }

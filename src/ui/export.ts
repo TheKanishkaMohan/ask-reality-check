@@ -1,0 +1,127 @@
+import {
+  UNIT_METADATA,
+  evaluateAsk,
+  formatMoney,
+  formatMonthlyMoney,
+  formatMultiple,
+  formatPercent,
+  solveGoalSeek,
+  type CheckInput,
+  type CurrencyUnit,
+  type GoalSeekTarget,
+} from '../engine';
+
+export function generateMarkdownSummary(
+  input: CheckInput,
+  unit: CurrencyUnit,
+  goalSeekTarget: GoalSeekTarget = 'max_ask',
+  goalSeekGrowth?: number
+): string {
+  const out = evaluateAsk(input, unit);
+  const seek = solveGoalSeek(
+    input,
+    goalSeekTarget,
+    goalSeekGrowth ?? input.verdictBands.reachableMax,
+    unit
+  );
+  const unitLabel = UNIT_METADATA[unit].shortUnit;
+  const monthlyRev = input.annualRevenue / 12;
+
+  const lines: string[] = [
+    `# Ask Reality Check — Summary (${unitLabel})`,
+    ``,
+    `**Verdict:** ${out.verdict.headline}`,
+    ``,
+    `## 1. Inputs`,
+    `- **Ask (Raise):** ${formatMoney(input.ask, unit)}`,
+    `- **Target Dilution:** ${formatPercent(input.dilutionPct, 1)}`,
+    `- **Current Revenue:** ${formatMoney(input.annualRevenue, unit)} ARR (${formatMonthlyMoney(monthlyRev, unit)})`,
+    `- **Required Step-Up:** ${formatMultiple(input.stepUpMultiple, 1)} in ${input.monthsToNextRound} months`,
+    `- **Next-Round Revenue Multiple:** ${formatMultiple(input.nextRoundMultiple, 1)} _(assumption)_`,
+  ];
+
+  if (input.cashNeeded > 0) {
+    lines.push(`- **Cash Needed (Burn Plan):** ${formatMoney(input.cashNeeded, unit)}`);
+  }
+  if (input.priorRaise > 0) {
+    lines.push(
+      `- **Previous Raise:** ${formatMoney(input.priorRaise, unit)} (${input.priorRaiseWasPriced ? 'priced round' : 'unpriced'})`
+    );
+  }
+  if (input.esopTopUpPct > 0) {
+    lines.push(`- **Pre-Money ESOP Pool Top-Up:** ${formatPercent(input.esopTopUpPct, 1)} of post-money`);
+  }
+
+  lines.push(
+    ``,
+    `## 2. What the Ask Signals`,
+    `| Metric | Value | Formula / Note |`,
+    `| :--- | :--- | :--- |`,
+    `| **Implied Post-Money** | ${out.metrics.impliedPostMoney.formattedValue} | ${out.metrics.impliedPostMoney.subtitle} |`,
+    `| **Implied Pre-Money** | ${out.metrics.impliedPreMoney.formattedValue} | ${out.metrics.impliedPreMoney.subtitle} |`
+  );
+
+  if (input.esopTopUpPct > 0) {
+    lines.push(
+      `| **Effective Pre-Money (after ESOP)** | ${out.metrics.effectivePreMoneyAfterEsop.formattedValue} | ${out.metrics.effectivePreMoneyAfterEsop.subtitle} |`
+    );
+  }
+
+  lines.push(
+    `| **Implied Revenue Multiple** | ${out.metrics.impliedPostRevenueMultiple.formattedValue} | ${out.metrics.impliedPostRevenueMultiple.subtitle} |`,
+    `| **Next-Round Pre-Money** | ${out.metrics.nextRoundPreMoney.formattedValue} | ${out.metrics.nextRoundPreMoney.subtitle} |`,
+    `| **Revenue Needed at Next Round** | ${out.metrics.requiredNextAnnualRevenue.formattedValue} | ${out.metrics.requiredNextAnnualRevenue.subtitle} |`,
+    `| **Required Revenue Growth** | ${out.metrics.requiredGrowthMultiple.formattedValue} | ${out.metrics.requiredGrowthMultiple.subtitle} |`,
+    `| **Milestone Funding Gap** | ${out.metrics.fundingGap.formattedValue} | ${out.metrics.fundingGap.subtitle} |`
+  );
+
+  lines.push(``, `## 3. Diagnostic Notes`);
+  out.verdict.reasons.forEach((r) => {
+    lines.push(`- ${r.text} _(${r.origin})_`);
+  });
+
+  if (out.validation.valid && input.annualRevenue > 0) {
+    lines.push(
+      ``,
+      `## 4. Goal-Seek & Feasible Ask Band`,
+      `- **Reachable Ask Ceiling (≤${formatMultiple(input.verdictBands.reachableMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit)}`,
+      `- **Stretch Ask Ceiling (≤${formatMultiple(input.verdictBands.stretchMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit)}`
+    );
+    if (out.feasibleAskBand.priorRaiseBand) {
+      lines.push(
+        `- **3–4x Priced Prior Raise Band:** ${formatMoney(out.feasibleAskBand.priorRaiseBand[0], unit)} – ${formatMoney(out.feasibleAskBand.priorRaiseBand[1], unit)}`
+      );
+    }
+    lines.push(`- **Goal-Seek (${seek.target.replace('_', ' ')}):** ${seek.summary}`);
+  }
+
+  if (out.sensitivity.length > 0) {
+    lines.push(
+      ``,
+      `## 5. Dilution Sensitivity`,
+      `| Dilution | Post-Money | Pre-Money | Pre / Post Multiple | Next Pre-Money | Growth Needed |`,
+      `| :--- | ---: | ---: | ---: | ---: | ---: |`
+    );
+    out.sensitivity.forEach((row) => {
+      const multStr =
+        row.impliedPreMultiple !== null && row.impliedPostMultiple !== null
+          ? `${formatMultiple(row.impliedPreMultiple, 1)} / ${formatMultiple(row.impliedPostMultiple, 1)}`
+          : '—';
+      const gxStr =
+        row.requiredGrowthMultiple !== null
+          ? formatMultiple(row.requiredGrowthMultiple, 1)
+          : '—';
+      lines.push(
+        `| ${formatPercent(row.dilutionPct, 1)}${row.isUserSelected ? ' *(yours)*' : ''} | ${formatMoney(row.postMoney, unit)} | ${formatMoney(row.preMoney, unit)} | ${multStr} | ${formatMoney(row.nextPreMoney, unit)} | ${gxStr} |`
+      );
+    });
+  }
+
+  lines.push(
+    ``,
+    `---`,
+    `_Generated by Ask Reality Check (client-side thinking aid based on Sajith Pai's note; not investment advice)._`
+  );
+
+  return lines.join('\n');
+}
