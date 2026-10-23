@@ -39,6 +39,7 @@ function renderTraceDetails(
   const isOpen = openTraces.has(traceId) ? ' open' : '';
   const badgeClass = isAssumption ? 'badge badge-assumption' : 'badge';
   const badgeLabel = isAssumption ? `Our assumption` : `Source article`;
+  const showDetailOrigin = origin.trim().toLowerCase() !== badgeLabel.toLowerCase();
   return `
     <details class="trace" data-trace-id="${escapeHtml(traceId)}"${isOpen}>
       <summary>How this is calculated</summary>
@@ -47,7 +48,7 @@ function renderTraceDetails(
         <div class="trace-calc">${escapeHtml(calculation)}</div>
         <div class="trace-origin">
           <span class="${badgeClass}">${escapeHtml(badgeLabel)}</span>
-          <span>${escapeHtml(origin)}</span>
+          ${showDetailOrigin ? `<span>${escapeHtml(origin)}</span>` : ''}
         </div>
       </div>
     </details>
@@ -953,9 +954,9 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
             <th>Dilution</th>
             <th>Post-money</th>
             <th>Pre-money</th>
-            <th>× Revenue (pre / post)</th>
-            <th>Next pre-money</th>
-            <th>Growth needed</th>
+            <th>Pre / Post ×</th>
+            <th>Next pre</th>
+            <th>Growth</th>
           </tr>
         </thead>
       `;
