@@ -1,4 +1,7 @@
 import type {
+  AskDilutionHeatmap,
+  AskDilutionHeatmapCell,
+  AskDilutionHeatmapRow,
   CheckInput,
   CheckMetrics,
   CheckOutput,
@@ -7,6 +10,8 @@ import type {
   FeasibleAskBand,
   GoalSeekResult,
   GoalSeekTarget,
+  OwnershipWaterfall,
+  OwnershipWaterfallStep,
   SensitivityRow,
   ValidationIssue,
   ValidationResult,
@@ -136,6 +141,30 @@ export function validateInput(input: CheckInput): ValidationResult {
     errors.push({
       field: 'verdictBands',
       message: 'Verdict bands must have 0 < Reachable ceiling < Stretch ceiling.',
+    });
+  }
+
+  if (
+    input.priorDilutionPct !== undefined &&
+    (!Number.isFinite(input.priorDilutionPct) ||
+      input.priorDilutionPct < 0 ||
+      input.priorDilutionPct >= 90)
+  ) {
+    errors.push({
+      field: 'priorDilutionPct',
+      message: 'R0 dilution must be between 0% and 89.9%.',
+    });
+  }
+
+  if (
+    input.nextRoundDilutionPct !== undefined &&
+    (!Number.isFinite(input.nextRoundDilutionPct) ||
+      input.nextRoundDilutionPct <= 0 ||
+      input.nextRoundDilutionPct >= 90)
+  ) {
+    errors.push({
+      field: 'nextRoundDilutionPct',
+      message: 'Illustrative R2 dilution must be between 0.1% and 89.9%.',
     });
   }
 
@@ -962,5 +991,278 @@ export function solveGoalSeek(
       ? `Required dilution (${formatPercent(reqDilutionPct, 1)}) exceeds available equity.`
       : undefined,
     feasibleAskBand,
+  };
+}
+
+function roundNiceAsk(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (v >= 100) return Math.round(v / 5) * 5;
+  if (v >= 20) return Math.round(v);
+  if (v >= 5) return Math.round(v * 2) / 2;
+  if (v >= 1) return Math.round(v * 10) / 10;
+  return Number(v.toPrecision(2));
+}
+
+export function computeAskDilutionHeatmap(input: CheckInput): AskDilutionHeatmap {
+  const validation = validateInput(input);
+  if (!validation.valid || input.annualRevenue <= 0) {
+    return {
+      available: false,
+      dilutions: [],
+      currentDilutionPct: input.dilutionPct,
+      rows: [],
+    };
+  }
+
+  const colSet = [15, 20, 25, 30];
+  if (!colSet.some((d) => Math.abs(d - input.dilutionPct) < 0.05)) {
+    colSet.push(Number(input.dilutionPct.toFixed(1)));
+  }
+  const dilutions = colSet
+    .filter((d) => d > 0 && d + input.esopTopUpPct < 100)
+    .sort((a, b) => a - b);
+
+  const band = computeFeasibleAskBand(input);
+  const effBands = computeEffectiveVerdictBands(input);
+  const r = band.reachableAsk;
+  const s = band.stretchAsk;
+  const a = input.ask;
+
+  const chosen: number[] = [a];
+  const tryAddAsk = (cand: number): void => {
+    if (!Number.isFinite(cand) || cand <= 0 || chosen.length >= 5) return;
+    if (chosen.every((x) => Math.abs(x - cand) / Math.max(x, cand) >= 0.08)) {
+      chosen.push(cand);
+    }
+  };
+
+  let priorityCandidates: number[];
+  if (a > s * 1.15) {
+    priorityCandidates = [
+      roundNiceAsk(r * 0.75),
+      roundNiceAsk(r),
+      roundNiceAsk(s),
+      roundNiceAsk(a * 1.25),
+    ];
+  } else if (a < r * 0.85) {
+    priorityCandidates = [
+      roundNiceAsk(a * 0.75),
+      roundNiceAsk(r),
+      roundNiceAsk(s),
+      roundNiceAsk(s * 1.25),
+    ];
+  } else {
+    priorityCandidates = [
+      roundNiceAsk(r * 0.7),
+      roundNiceAsk(r),
+      roundNiceAsk((r + s) / 2),
+      roundNiceAsk(s),
+      roundNiceAsk(s * 1.25),
+    ];
+  }
+
+  for (const cand of priorityCandidates) {
+    tryAddAsk(cand);
+  }
+  for (const mult of [0.5, 0.75, 1.25, 1.5, 1.75]) {
+    if (chosen.length >= 5) break;
+    tryAddAsk(roundNiceAsk(a * mult));
+  }
+  for (const mult of [0.4, 0.65, 1.35, 1.65, 2.0]) {
+    if (chosen.length >= 5) break;
+    tryAddAsk(Number((a * mult).toPrecision(3)));
+  }
+
+  const rowAsks = chosen.slice(0, 5).sort((x, y) => x - y);
+  const rows: AskDilutionHeatmapRow[] = rowAsks.map((rowAsk) => {
+    const isCurrentAsk = Math.abs(rowAsk - a) < 1e-6;
+    const cells: AskDilutionHeatmapCell[] = dilutions.map((colDil) => {
+      const core = computeRowForDilution(
+        rowAsk,
+        colDil,
+        input.annualRevenue,
+        input.stepUpMultiple,
+        input.nextRoundMultiple
+      );
+      const growth = core.requiredGrowthMultiple ?? 0;
+      const impliedCagrPct =
+        growth > 0 ? (Math.pow(growth, 12 / input.monthsToNextRound) - 1) * 100 : 0;
+      const level: 'reachable' | 'stretch' | 'stiff' =
+        growth <= effBands.reachableMax
+          ? 'reachable'
+          : growth <= effBands.stretchMax
+            ? 'stretch'
+            : 'stiff';
+      const isCurrent = isCurrentAsk && Math.abs(colDil - input.dilutionPct) < 0.05;
+
+      return {
+        ask: rowAsk,
+        dilutionPct: colDil,
+        postMoney: core.postMoney,
+        requiredGrowthMultiple: growth,
+        impliedCagrPct,
+        level,
+        isCurrent,
+      };
+    });
+
+    return {
+      ask: rowAsk,
+      isCurrentAsk,
+      cells,
+    };
+  });
+
+  return {
+    available: true,
+    dilutions,
+    currentDilutionPct: input.dilutionPct,
+    rows,
+  };
+}
+
+export function computeOwnershipWaterfall(input: CheckInput): OwnershipWaterfall {
+  const r0DilutionIsAssumed =
+    input.priorDilutionPct === undefined && input.priorRaise > 0 && input.priorRaiseWasPriced;
+  const r0DilutionPct =
+    input.priorDilutionPct !== undefined ? input.priorDilutionPct : r0DilutionIsAssumed ? 15 : 0;
+  const esopTopUpPct = input.esopTopUpPct;
+  const r1DilutionPct = input.dilutionPct;
+  const r2DilutionPct =
+    input.nextRoundDilutionPct !== undefined ? input.nextRoundDilutionPct : 20;
+
+  const valid =
+    Number.isFinite(r0DilutionPct) &&
+    r0DilutionPct >= 0 &&
+    r0DilutionPct < 90 &&
+    Number.isFinite(esopTopUpPct) &&
+    esopTopUpPct >= 0 &&
+    Number.isFinite(r1DilutionPct) &&
+    r1DilutionPct > 0 &&
+    r1DilutionPct < 100 &&
+    esopTopUpPct + r1DilutionPct < 100 &&
+    Number.isFinite(r2DilutionPct) &&
+    r2DilutionPct > 0 &&
+    r2DilutionPct < 90;
+
+  if (!valid) {
+    return {
+      valid: false,
+      r0DilutionPct: 0,
+      r0DilutionIsAssumed: false,
+      esopTopUpPct: 0,
+      r1DilutionPct: 0,
+      r2DilutionPct: 20,
+      founderPreR1Pct: 0,
+      founderPostR1Pct: 0,
+      founderPostR2Pct: 0,
+      r0InvestorPostR1Pct: 0,
+      steps: [],
+    };
+  }
+
+  const founderPreR1Pct = 100 - r0DilutionPct;
+  const esopDrop = founderPreR1Pct * (esopTopUpPct / 100);
+  const afterEsopPct = founderPreR1Pct - esopDrop;
+  const r1Drop = founderPreR1Pct * (r1DilutionPct / 100);
+  const founderPostR1Pct = afterEsopPct - r1Drop;
+  const r0InvestorPostR1Pct = r0DilutionPct * (1 - (esopTopUpPct + r1DilutionPct) / 100);
+  const r2Drop = founderPostR1Pct * (r2DilutionPct / 100);
+  const founderPostR2Pct = founderPostR1Pct - r2Drop;
+
+  const steps: OwnershipWaterfallStep[] = [
+    {
+      id: 'start',
+      label: 'Start',
+      sublabel: 'Founding',
+      kind: 'total',
+      startPct: 0,
+      endPct: 100,
+      deltaPct: 100,
+      tone: 'neutral',
+    },
+  ];
+
+  if (r0DilutionPct > 0) {
+    steps.push({
+      id: 'r0',
+      label: 'R0 round',
+      sublabel: r0DilutionIsAssumed ? '15% est.' : `${formatPercent(r0DilutionPct, 1)} R0`,
+      kind: 'drop',
+      startPct: founderPreR1Pct,
+      endPct: 100,
+      deltaPct: -r0DilutionPct,
+      tone: 'bad',
+    });
+  }
+
+  if (esopTopUpPct > 0) {
+    steps.push({
+      id: 'esop',
+      label: 'R1 ESOP',
+      sublabel: `${formatPercent(esopTopUpPct, 1)} pool`,
+      kind: 'drop',
+      startPct: afterEsopPct,
+      endPct: founderPreR1Pct,
+      deltaPct: -esopDrop,
+      tone: 'warn',
+    });
+  }
+
+  steps.push(
+    {
+      id: 'r1',
+      label: 'R1 dilution',
+      sublabel: `${formatPercent(r1DilutionPct, 1)} round`,
+      kind: 'drop',
+      startPct: founderPostR1Pct,
+      endPct: afterEsopPct,
+      deltaPct: -r1Drop,
+      tone: 'bad',
+    },
+    {
+      id: 'post_r1',
+      label: 'Post R1',
+      sublabel: 'Founder stake',
+      kind: 'total',
+      startPct: 0,
+      endPct: founderPostR1Pct,
+      deltaPct: founderPostR1Pct,
+      tone: 'primary',
+    },
+    {
+      id: 'r2',
+      label: 'R2 (est.)',
+      sublabel: `${formatPercent(r2DilutionPct, 1)} round`,
+      kind: 'drop',
+      startPct: founderPostR2Pct,
+      endPct: founderPostR1Pct,
+      deltaPct: -r2Drop,
+      tone: 'warn',
+    },
+    {
+      id: 'post_r2',
+      label: 'Post R2',
+      sublabel: 'Founder stake',
+      kind: 'total',
+      startPct: 0,
+      endPct: founderPostR2Pct,
+      deltaPct: founderPostR2Pct,
+      tone: founderPostR2Pct >= 50 ? 'good' : 'warn',
+    }
+  );
+
+  return {
+    valid: true,
+    r0DilutionPct,
+    r0DilutionIsAssumed,
+    esopTopUpPct,
+    r1DilutionPct,
+    r2DilutionPct,
+    founderPreR1Pct,
+    founderPostR1Pct,
+    founderPostR2Pct,
+    r0InvestorPostR1Pct,
+    steps,
   };
 }

@@ -27,6 +27,8 @@ const PARAM_MAP = {
   monthsToNextRound: 'm',
   cashNeeded: 'cash',
   esopTopUpPct: 'esop',
+  priorDilutionPct: 'r0d',
+  nextRoundDilutionPct: 'r2d',
   reachableMax: 'rmax',
   stretchMax: 'smax',
   goalSeekTarget: 'gst',
@@ -71,6 +73,12 @@ export function getInitialState(): AppState {
     const n = Number(raw);
     return Number.isFinite(n) ? n : fallback;
   };
+  const parseOptionalNum = (key: string): number | undefined => {
+    const raw = params.get(key);
+    if (raw === null || raw.trim() === '') return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  };
 
   const unitRaw = params.get(PARAM_MAP.unit);
   const unit: CurrencyUnit =
@@ -95,6 +103,8 @@ export function getInitialState(): AppState {
   const reachableMax = parseNum(PARAM_MAP.reachableMax, seed.verdictBands.reachableMax);
   const stretchMax = parseNum(PARAM_MAP.stretchMax, seed.verdictBands.stretchMax);
   const goalSeekGrowth = parseNum(PARAM_MAP.goalSeekGrowth, reachableMax);
+  const priorDilutionPct = parseOptionalNum(PARAM_MAP.priorDilutionPct);
+  const nextRoundDilutionPct = parseOptionalNum(PARAM_MAP.nextRoundDilutionPct);
 
   const input: CheckInput = {
     ask: parseNum(PARAM_MAP.ask, seed.ask),
@@ -107,6 +117,8 @@ export function getInitialState(): AppState {
     monthsToNextRound: parseNum(PARAM_MAP.monthsToNextRound, seed.monthsToNextRound),
     cashNeeded: parseNum(PARAM_MAP.cashNeeded, seed.cashNeeded),
     esopTopUpPct: parseNum(PARAM_MAP.esopTopUpPct, seed.esopTopUpPct),
+    priorDilutionPct,
+    nextRoundDilutionPct,
     verdictBands: {
       reachableMax,
       stretchMax,
@@ -124,7 +136,9 @@ export function getInitialState(): AppState {
     input.nextRoundMultiple === matchedPreset.input.nextRoundMultiple &&
     input.monthsToNextRound === matchedPreset.input.monthsToNextRound &&
     input.cashNeeded === matchedPreset.input.cashNeeded &&
-    input.esopTopUpPct === matchedPreset.input.esopTopUpPct;
+    input.esopTopUpPct === matchedPreset.input.esopTopUpPct &&
+    input.priorDilutionPct === undefined &&
+    (input.nextRoundDilutionPct === undefined || input.nextRoundDilutionPct === 20);
 
   return {
     unit,
@@ -160,6 +174,15 @@ export function buildQueryString(state: AppState): string {
   }
   if (state.input.esopTopUpPct > 0) {
     params.set(PARAM_MAP.esopTopUpPct, String(state.input.esopTopUpPct));
+  }
+  if (state.input.priorDilutionPct !== undefined) {
+    params.set(PARAM_MAP.priorDilutionPct, String(state.input.priorDilutionPct));
+  }
+  if (
+    state.input.nextRoundDilutionPct !== undefined &&
+    state.input.nextRoundDilutionPct !== 20
+  ) {
+    params.set(PARAM_MAP.nextRoundDilutionPct, String(state.input.nextRoundDilutionPct));
   }
   if (state.input.verdictBands.reachableMax !== DEFAULT_VERDICT_BANDS.reachableMax) {
     params.set(PARAM_MAP.reachableMax, String(state.input.verdictBands.reachableMax));

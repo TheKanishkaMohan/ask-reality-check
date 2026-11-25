@@ -4,7 +4,9 @@ import {
   DEFAULT_VERDICT_BANDS,
   PRESET_SCENARIOS,
   SECTOR_MULTIPLE_BENCHMARKS,
+  computeAskDilutionHeatmap,
   computeFeasibleAskBand,
+  computeOwnershipWaterfall,
   convertUnitScale,
   evaluateAsk,
   formatMoney,
@@ -361,6 +363,82 @@ describe('CAGR-Normalised Horizon Verdicts, ELI10 Rules & Sector Benchmarks', ()
       for (const reason of out.verdict.reasons) {
         expect(reason.text).not.toContain('—');
       }
+    }
+  });
+});
+
+describe('Ask vs. Dilution Sensitivity Heatmap & Founder Ownership Waterfall', () => {
+  it('computes a 5-row sensitivity grid spanning Reachable, Stretch, and Stiff and marks the current cell', () => {
+    const presetA = PRESET_SCENARIOS.find((p) => p.id === 'a')!;
+    const heatmap = computeAskDilutionHeatmap(presetA.input);
+
+    expect(heatmap.available).toBe(true);
+    expect(heatmap.dilutions).toEqual([15, 20, 25, 30]);
+    expect(heatmap.rows).toHaveLength(5);
+    expect(heatmap.rows.some((r) => r.ask === 50 && r.isCurrentAsk)).toBe(true);
+
+    const allCells = heatmap.rows.flatMap((r) => r.cells);
+    const currentCells = allCells.filter((c) => c.isCurrent);
+    expect(currentCells).toHaveLength(1);
+    expect(currentCells[0]!.ask).toBe(50);
+    expect(currentCells[0]!.dilutionPct).toBe(20);
+    expect(currentCells[0]!.level).toBe('stiff');
+
+    const levels = new Set(allCells.map((c) => c.level));
+    expect(levels.has('reachable')).toBe(true);
+    expect(levels.has('stretch')).toBe(true);
+    expect(levels.has('stiff')).toBe(true);
+
+    const customHeatmap = computeAskDilutionHeatmap(makeInput({ dilutionPct: 12 }));
+    expect(customHeatmap.dilutions).toEqual([12, 15, 20, 25, 30]);
+
+    const zeroRevHeatmap = computeAskDilutionHeatmap(makeInput({ annualRevenue: 0 }));
+    expect(zeroRevHeatmap.available).toBe(false);
+    expect(zeroRevHeatmap.rows).toHaveLength(0);
+  });
+
+  it('computes founder ownership across R0, ESOP, R1, and illustrative R2 with cap-table reconciliation', () => {
+    const baseWf = computeOwnershipWaterfall(makeInput());
+    expect(baseWf.valid).toBe(true);
+    expect(baseWf.r0DilutionIsAssumed).toBe(false);
+    expect(baseWf.founderPreR1Pct).toBeCloseTo(100, 5);
+    expect(baseWf.founderPostR1Pct).toBeCloseTo(80, 5);
+    expect(baseWf.founderPostR2Pct).toBeCloseTo(64, 5);
+
+    const assumedR0Wf = computeOwnershipWaterfall(
+      makeInput({ priorRaise: 10, priorRaiseWasPriced: true })
+    );
+    expect(assumedR0Wf.valid).toBe(true);
+    expect(assumedR0Wf.r0DilutionIsAssumed).toBe(true);
+    expect(assumedR0Wf.r0DilutionPct).toBe(15);
+    expect(assumedR0Wf.founderPreR1Pct).toBeCloseTo(85, 5);
+
+    const fullWf = computeOwnershipWaterfall(
+      makeInput({
+        priorRaise: 10,
+        priorRaiseWasPriced: true,
+        priorDilutionPct: 15,
+        esopTopUpPct: 10,
+        dilutionPct: 20,
+        nextRoundDilutionPct: 20,
+      })
+    );
+    expect(fullWf.valid).toBe(true);
+    expect(fullWf.r0DilutionIsAssumed).toBe(false);
+    expect(fullWf.founderPostR1Pct).toBeCloseTo(59.5, 5);
+    expect(fullWf.r0InvestorPostR1Pct).toBeCloseTo(10.5, 5);
+    expect(fullWf.founderPostR2Pct).toBeCloseTo(47.6, 5);
+
+    const totalPostR1 =
+      fullWf.founderPostR1Pct +
+      fullWf.r0InvestorPostR1Pct +
+      fullWf.esopTopUpPct +
+      fullWf.r1DilutionPct;
+    expect(totalPostR1).toBeCloseTo(100, 5);
+
+    for (const s of fullWf.steps) {
+      expect(s.label).not.toContain('—');
+      expect(s.sublabel).not.toContain('—');
     }
   });
 });

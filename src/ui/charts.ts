@@ -1,4 +1,5 @@
 import {
+  computeOwnershipWaterfall,
   formatMoney,
   formatMultiple,
   formatNumber,
@@ -550,6 +551,111 @@ export function renderCagrGaugeSvg(output: CheckOutput): string {
       <circle cx="${xPin}" cy="${trackY + trackH / 2}" r="4.5" fill="${pinColor}" stroke="#ffffff" stroke-width="1.5" />
 
       <text x="${x0}" y="104" text-anchor="start" fill="${pinColor}" class="vc-svg-sub-pill">${escapeXml(captionText)}</text>
+    </svg>
+  `.trim();
+}
+
+export function renderOwnershipWaterfallSvg(output: CheckOutput): string {
+  const waterfall = computeOwnershipWaterfall(output.input);
+  if (!waterfall.valid || waterfall.steps.length === 0) {
+    return `
+      <svg class="vc-chart-svg vc-chart-svg--waterfall" viewBox="0 0 680 236" role="img" aria-label="Founder ownership waterfall awaiting valid dilution inputs">
+        <title>Founder ownership waterfall</title>
+        <rect x="1" y="1" width="678" height="234" rx="8" fill="#f3f3f3" stroke="#d2d2d7" />
+        <text x="340" y="122" text-anchor="middle" class="vc-svg-sub">Enter valid dilution and ESOP values to render the ownership waterfall.</text>
+      </svg>
+    `.trim();
+  }
+
+  const steps = waterfall.steps;
+  const count = steps.length;
+  const plotLeft = 48;
+  const plotRight = 664;
+  const plotW = plotRight - plotLeft;
+  const gap = count >= 7 ? 20 : count === 6 ? 28 : 38;
+  const barW = Math.min(72, Math.floor((plotW - (count - 1) * gap) / count));
+  const totalW = count * barW + (count - 1) * gap;
+  const startX = Math.round(plotLeft + (plotW - totalW) / 2);
+
+  const topY = 34;
+  const baselineY = 176;
+  const maxBarH = baselineY - topY;
+  const midY = Math.round((topY + baselineY) / 2);
+
+  const toY = (pct: number): number => {
+    const clamped = Math.min(100, Math.max(0, pct));
+    return Math.round((baselineY - (clamped / 100) * maxBarH) * 10) / 10;
+  };
+
+  const palette = (step: (typeof steps)[number]) => {
+    if (step.kind === 'total') {
+      if (step.tone === 'primary') {
+        return { fill: '#007aff', stroke: '#0066d6', valFill: '#0058c4' };
+      }
+      if (step.tone === 'good') {
+        return { fill: '#1b7a35', stroke: '#155d28', valFill: '#1b7a35' };
+      }
+      if (step.tone === 'warn') {
+        return { fill: '#ff9500', stroke: '#9a5800', valFill: '#9a5800' };
+      }
+      return { fill: '#e8e8ed', stroke: '#6e6e73', valFill: '#1c1c1c' };
+    }
+    if (step.tone === 'bad') {
+      return { fill: '#fdeceb', stroke: '#c4281c', valFill: '#c4281c' };
+    }
+    return { fill: '#fff4e0', stroke: '#9a5800', valFill: '#9a5800' };
+  };
+
+  const connectorsMarkup = steps
+    .slice(0, -1)
+    .map((step, idx) => {
+      const levelPct = step.kind === 'total' ? step.endPct : step.startPct;
+      const connY = toY(levelPct);
+      const xStart = startX + idx * (barW + gap) + barW;
+      const xEnd = startX + (idx + 1) * (barW + gap);
+      return `<line x1="${xStart}" y1="${connY}" x2="${xEnd}" y2="${connY}" stroke="#c7c7cc" stroke-width="1" stroke-dasharray="3 3" />`;
+    })
+    .join('');
+
+  const barsMarkup = steps
+    .map((step, idx) => {
+      const x = startX + idx * (barW + gap);
+      const cx = x + barW / 2;
+      const yTop = toY(step.endPct);
+      const yBottom = toY(step.startPct);
+      const rectH = Math.max(4, Math.round((yBottom - yTop) * 10) / 10);
+      const colors = palette(step);
+      const topValText =
+        step.kind === 'drop'
+          ? `−${formatPercent(Math.abs(step.deltaPct), 1)}`
+          : formatPercent(step.endPct, 1);
+
+      return `
+        <g>
+          <rect x="${x}" y="${yTop}" width="${barW}" height="${rectH}" rx="5" fill="${colors.fill}" stroke="${colors.stroke}" stroke-width="1.25" />
+          <text x="${cx}" y="${Math.max(15, yTop - 7)}" text-anchor="middle" fill="${colors.valFill}" class="vc-svg-val-sm">${escapeXml(topValText)}</text>
+          <text x="${cx}" y="196" text-anchor="middle" class="vc-svg-label">${escapeXml(step.label)}</text>
+          <text x="${cx}" y="213" text-anchor="middle" class="vc-svg-sub">${escapeXml(step.sublabel)}</text>
+        </g>
+      `;
+    })
+    .join('');
+
+  const ariaLabel = `Founder ownership waterfall: ${formatPercent(waterfall.founderPreR1Pct, 1)} pre-R1 to ${formatPercent(waterfall.founderPostR1Pct, 1)} post-R1 and ${formatPercent(waterfall.founderPostR2Pct, 1)} post-R2`;
+
+  return `
+    <svg class="vc-chart-svg vc-chart-svg--waterfall" viewBox="0 0 680 236" role="img" aria-label="${escapeXml(ariaLabel)}">
+      <title>Founder ownership waterfall across R0, R1, and illustrative R2</title>
+      <line x1="${plotLeft}" y1="${topY}" x2="${plotRight}" y2="${topY}" stroke="#ececef" stroke-dasharray="3 3" />
+      <line x1="${plotLeft}" y1="${midY}" x2="${plotRight}" y2="${midY}" stroke="#e5e5ea" stroke-dasharray="3 3" />
+      <line x1="${plotLeft}" y1="${baselineY}" x2="${plotRight}" y2="${baselineY}" stroke="#c7c7cc" />
+
+      <text x="${plotLeft - 6}" y="${topY + 4}" text-anchor="end" class="vc-svg-axis">100%</text>
+      <text x="${plotLeft - 6}" y="${midY + 4}" text-anchor="end" class="vc-svg-axis">50%</text>
+      <text x="${plotLeft - 6}" y="${baselineY + 4}" text-anchor="end" class="vc-svg-axis">0%</text>
+
+      ${connectorsMarkup}
+      ${barsMarkup}
     </svg>
   `.trim();
 }

@@ -1591,6 +1591,200 @@ details.trace[open] summary::before {
   border-radius: 4px;
 }
 
+/* ---------- ask vs. dilution sensitivity heatmap ---------- */
+.vc-heatmap-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.vc-hm-empty {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-control);
+  background: var(--bg-band);
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+
+.vc-heatmap-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: separate;
+  border-spacing: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.vc-heatmap-table th,
+.vc-heatmap-table td {
+  border: 0;
+  padding: 0;
+  vertical-align: middle;
+}
+
+.vc-hm-corner,
+.vc-hm-col-head {
+  padding: 6px 8px;
+  font: 600 12px/1.3 var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  text-align: center;
+  background: var(--bg-band);
+  border-radius: 6px;
+}
+
+.vc-hm-corner {
+  text-align: left;
+  min-width: 112px;
+}
+
+.vc-hm-col-head.is-current-col {
+  color: var(--eq-text);
+  background: #eaf3ff;
+}
+
+.vc-hm-row-head {
+  padding: 8px 10px;
+  text-align: left;
+  font: 600 13px/1.25 var(--font-sans);
+  color: var(--text);
+  background: var(--bg-band);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.vc-hm-row-head.is-current-row {
+  color: var(--eq-text);
+  background: #eaf3ff;
+}
+
+.vc-hm-now {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--eq-text);
+}
+
+.vc-hm-cell {
+  width: 100%;
+  min-height: 54px;
+  padding: 7px 10px;
+  border-radius: var(--r-control);
+  border: 1px solid var(--hairline-band);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  text-align: center;
+  font-family: var(--font-sans);
+  transition: transform 0.08s ease, box-shadow 0.12s ease;
+}
+
+.vc-hm-cell:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.vc-hm-cell:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+.vc-hm-cell--reachable {
+  background: #e8f7ec;
+  border-color: rgba(27, 122, 53, 0.35);
+  color: var(--green-text);
+}
+
+.vc-hm-cell--stretch {
+  background: #fff4e0;
+  border-color: rgba(154, 88, 0, 0.35);
+  color: var(--orange-text);
+}
+
+.vc-hm-cell--stiff {
+  background: #fdeceb;
+  border-color: rgba(196, 40, 28, 0.32);
+  color: var(--red-text);
+}
+
+.vc-hm-cell--current {
+  border-width: 2px;
+  border-color: var(--link);
+  box-shadow: 0 0 0 2px rgba(0, 102, 214, 0.18);
+}
+
+.vc-hm-cagr {
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.vc-hm-meta {
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.25;
+  opacity: 0.92;
+  white-space: nowrap;
+}
+
+/* ---------- founder ownership waterfall (inside R0 & ESOP drawer) ---------- */
+.vc-waterfall-box {
+  margin-top: 2px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vc-waterfall-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.vc-chart-svg--waterfall {
+  max-height: 248px;
+}
+
+.vc-captable-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.vc-captable-pill {
+  background: var(--bg-band);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-control);
+  padding: 8px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vc-captable-pill .cl {
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.vc-captable-pill .cv {
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
 .vc-footnote {
   margin: 0;
   font-size: 12.5px;
@@ -1789,6 +1983,13 @@ details.trace[open] summary::before {
   }
   .vc-card {
     padding: 16px;
+  }
+  .vc-hm-cell {
+    min-height: 50px;
+    padding: 6px 8px;
+  }
+  .vc-captable-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

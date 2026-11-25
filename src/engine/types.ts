@@ -41,11 +41,19 @@ export interface CheckInput {
   cashNeeded: number;
   /** Pre-money ESOP pool expansion required by investor, as % of post-money (0 if none) */
   esopTopUpPct: number;
+  /** Optional equity % sold in prior round (R0) */
+  priorDilutionPct?: number;
+  /** Optional illustrative equity % sold in next round (R2, defaults to 20%) */
+  nextRoundDilutionPct?: number;
   /** Configurable growth verdict bands */
   verdictBands: VerdictBands;
 }
 
-export type ValidationField = keyof CheckInput | 'esopAndDilution';
+export type ValidationField =
+  | keyof CheckInput
+  | 'esopAndDilution'
+  | 'priorDilutionPct'
+  | 'nextRoundDilutionPct';
 
 export interface ValidationIssue {
   field: ValidationField;
@@ -172,4 +180,52 @@ export interface SectorMultipleBenchmark {
   p50: number;
   p75: number;
   note: string;
+}
+
+export interface AskDilutionHeatmapCell {
+  ask: number;
+  dilutionPct: number;
+  postMoney: number;
+  requiredGrowthMultiple: number;
+  impliedCagrPct: number;
+  level: 'reachable' | 'stretch' | 'stiff';
+  isCurrent: boolean;
+}
+
+export interface AskDilutionHeatmapRow {
+  ask: number;
+  isCurrentAsk: boolean;
+  cells: AskDilutionHeatmapCell[];
+}
+
+export interface AskDilutionHeatmap {
+  available: boolean;
+  dilutions: number[];
+  currentDilutionPct: number;
+  rows: AskDilutionHeatmapRow[];
+}
+
+export interface OwnershipWaterfallStep {
+  id: 'start' | 'r0' | 'esop' | 'r1' | 'post_r1' | 'r2' | 'post_r2';
+  label: string;
+  sublabel: string;
+  kind: 'total' | 'drop';
+  startPct: number;
+  endPct: number;
+  deltaPct: number;
+  tone: 'neutral' | 'primary' | 'good' | 'warn' | 'bad';
+}
+
+export interface OwnershipWaterfall {
+  valid: boolean;
+  r0DilutionPct: number;
+  r0DilutionIsAssumed: boolean;
+  esopTopUpPct: number;
+  r1DilutionPct: number;
+  r2DilutionPct: number;
+  founderPreR1Pct: number;
+  founderPostR1Pct: number;
+  founderPostR2Pct: number;
+  r0InvestorPostR1Pct: number;
+  steps: OwnershipWaterfallStep[];
 }

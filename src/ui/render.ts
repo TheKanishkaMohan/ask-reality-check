@@ -3,6 +3,8 @@ import {
   PRESET_SCENARIOS,
   SECTOR_MULTIPLE_BENCHMARKS,
   UNIT_METADATA,
+  computeAskDilutionHeatmap,
+  computeOwnershipWaterfall,
   convertUnitScale,
   evaluateAsk,
   formatMoney,
@@ -21,6 +23,7 @@ import {
   renderCagrGaugeSvg,
   renderFeasibleAskBarSvg,
   renderMultipleShiftSvg,
+  renderOwnershipWaterfallSvg,
   renderRevenueBridgeSvg,
   renderValuationLadderSvg,
 } from './charts';
@@ -312,17 +315,47 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                   </div>
                   <div class="vc-field">
                     <div class="vc-field__head">
+                      <label for="r0-dil">R0 dilution</label>
+                      ${renderInfoTip(
+                        'tip-r0-dil',
+                        'R0 dilution',
+                        'Equity % sold in R0. Leave blank to assume 15% when a priced R0 raise is entered, or 0% if none.',
+                        true
+                      )}
+                    </div>
+                    <input id="r0-dil" class="tkm-input" type="number" step="any" min="0" max="89.9" placeholder="Auto (15% if priced)" inputmode="decimal" />
+                    <small id="r0-dil-sub">% equity sold in R0 (optional)</small>
+                    <div class="vc-field-error" id="err-r0-dil" hidden></div>
+                  </div>
+                  <div class="vc-field">
+                    <div class="vc-field__head">
                       <label for="esop">R1 ESOP top-up</label>
                       ${renderInfoTip(
                         'tip-esop',
                         'R1 ESOP top-up',
-                        'New option pool added at R1 as a % of post-money. This reduces existing shareholders effective R1 pre-money, not your R2 target.',
-                        true
+                        'New option pool added at R1 as a % of post-money. This reduces existing shareholders effective R1 pre-money, not your R2 target.'
                       )}
                     </div>
                     <input id="esop" class="tkm-input" type="number" step="any" min="0" max="50" inputmode="decimal" />
                     <small>% of post-money; lowers effective R1 pre-money</small>
                     <div class="vc-field-error" id="err-esop" hidden></div>
+                  </div>
+                  <div class="vc-field">
+                    <div class="vc-field__head">
+                      <label for="r2-dil">Illustrative R2 dilution</label>
+                      <span class="vc-field__head-right">
+                        <span class="chip chip--primary">Assumption</span>
+                        ${renderInfoTip(
+                          'tip-r2-dil',
+                          'Illustrative R2 dilution',
+                          'Illustrative equity % sold in R2 (20% typical). Used only to project post-R2 founder stake in the ownership waterfall.',
+                          true
+                        )}
+                      </span>
+                    </div>
+                    <input id="r2-dil" class="tkm-input" type="number" step="any" min="0.1" max="89.9" inputmode="decimal" />
+                    <small>% equity sold in R2 (20% std)</small>
+                    <div class="vc-field-error" id="err-r2-dil" hidden></div>
                   </div>
                 </div>
 
@@ -332,6 +365,19 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                     <label for="priced">R0 was a priced equity round</label>
                     <small>Checks the 3x to 4x raise jump rule. Uncheck for grants, notes, or founder cash.</small>
                   </div>
+                </div>
+
+                <div class="vc-waterfall-box" id="ownership-waterfall-box">
+                  <div class="vc-waterfall-head">
+                    <div>
+                      <p class="vc-eyebrow">Founder ownership waterfall</p>
+                      <small class="vc-hint">R0 → R1 ESOP → R1 dilution → illustrative R2</small>
+                    </div>
+                    <span class="chip chip--rolling" id="ownership-summary">100% → 80% → 64%</span>
+                  </div>
+                  <div id="ownership-waterfall" class="vc-chart-box"></div>
+                  <div id="ownership-captable" class="vc-captable-strip" aria-label="Post-R1 ownership breakdown"></div>
+                  <div id="ownership-trace-wrap"></div>
                 </div>
               </div>
             </details>
@@ -593,6 +639,22 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                 </p>
               </div>
             </div>
+
+            <div class="vc-card" id="heatmap-card" aria-label="Ask vs. dilution sensitivity grid">
+              <div class="vc-card__head">
+                <div>
+                  <p class="vc-eyebrow">Ask vs. dilution sensitivity grid</p>
+                  <small class="vc-hint">Required annual CAGR and growth multiple across asks and dilutions. Click any cell to apply.</small>
+                </div>
+                <div class="vc-heatmap-legend" aria-label="Grid legend">
+                  <span class="chip chip--open">Reachable</span>
+                  <span class="chip chip--soon">Stretch</span>
+                  <span class="chip chip--closed">Stiff</span>
+                </div>
+              </div>
+              <div class="vc-scroll" id="heatmap-wrap"></div>
+              <div id="heatmap-trace-wrap"></div>
+            </div>
           </section>
 
           <p class="vc-credit-footnote">
@@ -671,12 +733,14 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   const mrrEl = root.querySelector<HTMLInputElement>('#mrr')!;
   const revEl = root.querySelector<HTMLInputElement>('#rev')!;
   const priorEl = root.querySelector<HTMLInputElement>('#prior')!;
+  const r0DilEl = root.querySelector<HTMLInputElement>('#r0-dil')!;
   const pricedEl = root.querySelector<HTMLInputElement>('#priced')!;
   const stepEl = root.querySelector<HTMLInputElement>('#step')!;
   const multEl = root.querySelector<HTMLInputElement>('#mult')!;
   const monthsEl = root.querySelector<HTMLInputElement>('#months')!;
   const cashEl = root.querySelector<HTMLInputElement>('#cash')!;
   const esopEl = root.querySelector<HTMLInputElement>('#esop')!;
+  const r2DilEl = root.querySelector<HTMLInputElement>('#r2-dil')!;
   const gsTargetEl = root.querySelector<HTMLSelectElement>('#gs-target')!;
   const gsGrowthEl = root.querySelector<HTMLInputElement>('#gs-growth')!;
   const presetsBox = root.querySelector<HTMLElement>('#presets')!;
@@ -686,6 +750,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   const unitSwitcher = root.querySelector<HTMLElement>('#unit-switcher')!;
   const downloadXlsxBtn = root.querySelector<HTMLButtonElement>('#download-xlsx-btn')!;
   const sectorDrawer = root.querySelector<HTMLElement>('#sector-benchmarks-drawer')!;
+  const heatmapWrap = root.querySelector<HTMLElement>('#heatmap-wrap')!;
   const navTools = root.querySelector<HTMLDetailsElement>('#nav-tools');
 
   if (navTools) {
@@ -806,6 +871,22 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     });
   });
 
+  // Sensitivity heatmap clickable cells
+  heatmapWrap.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>('button.vc-hm-cell');
+    if (!btn) return;
+    const nextAsk = Number(btn.dataset.ask);
+    const nextDil = Number(btn.dataset.dil);
+    if (!Number.isFinite(nextAsk) || !Number.isFinite(nextDil) || nextAsk <= 0 || nextDil <= 0) {
+      return;
+    }
+    state.activePresetId = null;
+    state.input.ask = Number(nextAsk.toFixed(4));
+    state.input.dilutionPct = Number(nextDil.toFixed(1));
+    populateInputsFromState();
+    updateUI();
+  });
+
   // Unit switcher
   unitSwitcher.querySelectorAll<HTMLButtonElement>('button[data-unit]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -868,12 +949,20 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       mrrEl.value = String(Number(monthly.toFixed(4)));
     }
     if (skipElement !== priorEl) priorEl.value = String(input.priorRaise);
+    if (skipElement !== r0DilEl) {
+      r0DilEl.value = input.priorDilutionPct !== undefined ? String(input.priorDilutionPct) : '';
+    }
     pricedEl.checked = input.priorRaiseWasPriced;
     if (skipElement !== stepEl) stepEl.value = String(input.stepUpMultiple);
     if (skipElement !== multEl) multEl.value = String(input.nextRoundMultiple);
     if (skipElement !== monthsEl) monthsEl.value = String(input.monthsToNextRound);
     if (skipElement !== cashEl) cashEl.value = String(input.cashNeeded);
     if (skipElement !== esopEl) esopEl.value = String(input.esopTopUpPct);
+    if (skipElement !== r2DilEl) {
+      r2DilEl.value = String(
+        input.nextRoundDilutionPct !== undefined ? input.nextRoundDilutionPct : 20
+      );
+    }
     if (skipElement !== gsTargetEl) gsTargetEl.value = state.goalSeekTarget;
     if (skipElement !== gsGrowthEl) gsGrowthEl.value = String(state.goalSeekGrowth);
   }
@@ -913,12 +1002,18 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       state.input.ask = readNumericInput(askEl);
       state.input.dilutionPct = readNumericInput(dilEl);
       state.input.priorRaise = readNumericInput(priorEl);
+      const rawR0Dil = r0DilEl.value.trim();
+      state.input.priorDilutionPct =
+        rawR0Dil === '' ? undefined : readNumericInput(r0DilEl);
       state.input.priorRaiseWasPriced = pricedEl.checked;
       state.input.stepUpMultiple = readNumericInput(stepEl);
       state.input.nextRoundMultiple = readNumericInput(multEl);
       state.input.monthsToNextRound = readNumericInput(monthsEl);
       state.input.cashNeeded = readNumericInput(cashEl);
       state.input.esopTopUpPct = readNumericInput(esopEl);
+      const rawR2Dil = r2DilEl.value.trim();
+      state.input.nextRoundDilutionPct =
+        rawR2Dil === '' ? undefined : readNumericInput(r2DilEl);
     }
 
     updateUI();
@@ -930,11 +1025,13 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     mrrEl,
     revEl,
     priorEl,
+    r0DilEl,
     stepEl,
     multEl,
     monthsEl,
     cashEl,
     esopEl,
+    r2DilEl,
     gsGrowthEl,
   ].forEach((el) => {
     el.addEventListener('input', () => handleInputChange(el));
@@ -950,11 +1047,13 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       dilutionPct: { input: dilEl, errEl: root.querySelector('#err-dil')! },
       annualRevenue: { input: revEl, errEl: root.querySelector('#err-rev')! },
       priorRaise: { input: priorEl, errEl: root.querySelector('#err-prior')! },
+      priorDilutionPct: { input: r0DilEl, errEl: root.querySelector('#err-r0-dil')! },
       stepUpMultiple: { input: stepEl, errEl: root.querySelector('#err-step')! },
       nextRoundMultiple: { input: multEl, errEl: root.querySelector('#err-mult')! },
       monthsToNextRound: { input: monthsEl, errEl: root.querySelector('#err-months')! },
       cashNeeded: { input: cashEl, errEl: root.querySelector('#err-cash')! },
       esopTopUpPct: { input: esopEl, errEl: root.querySelector('#err-esop')! },
+      nextRoundDilutionPct: { input: r2DilEl, errEl: root.querySelector('#err-r2-dil')! },
       esopAndDilution: { input: esopEl, errEl: root.querySelector('#err-esop')! },
     };
 
@@ -1001,20 +1100,42 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       );
     });
 
-    // Update settings summary chip
+    // Update settings summary chip & waterfall helpers
+    const waterfall = computeOwnershipWaterfall(state.input);
     const summaryParts: string[] = [];
     if (state.input.priorRaise > 0) {
       summaryParts.push(`R0 ${formatMoney(state.input.priorRaise, state.unit)}`);
+    } else if (state.input.priorDilutionPct !== undefined && state.input.priorDilutionPct > 0) {
+      summaryParts.push(`R0 ${formatPercent(state.input.priorDilutionPct, 1)} dil.`);
     }
     if (state.input.esopTopUpPct > 0) {
       summaryParts.push(`ESOP ${formatPercent(state.input.esopTopUpPct, 1)}`);
     }
-    if (summaryParts.length > 0) {
+    if (waterfall.valid) {
+      summaryParts.push(`Founders ${formatPercent(waterfall.founderPostR1Pct, 1)} R1`);
+    }
+    if (
+      state.input.priorRaise > 0 ||
+      state.input.esopTopUpPct > 0 ||
+      state.input.priorDilutionPct !== undefined ||
+      (state.input.nextRoundDilutionPct !== undefined && state.input.nextRoundDilutionPct !== 20)
+    ) {
       settingsSummaryChip.className = 'chip chip--primary';
       settingsSummaryChip.textContent = summaryParts.join(' · ');
     } else {
       settingsSummaryChip.className = 'chip chip--rolling';
-      settingsSummaryChip.textContent = 'Optional';
+      settingsSummaryChip.textContent = waterfall.valid
+        ? `Optional · ${formatPercent(waterfall.founderPostR1Pct, 0)} R1`
+        : 'Optional';
+    }
+
+    const r0DilSubEl = root.querySelector('#r0-dil-sub')!;
+    if (waterfall.valid && waterfall.r0DilutionIsAssumed) {
+      r0DilSubEl.textContent = 'Assuming 15% from priced R0 (override if different)';
+    } else if (state.input.priorDilutionPct !== undefined) {
+      r0DilSubEl.textContent = `% equity sold in R0 (${formatPercent(state.input.priorDilutionPct, 1)} set)`;
+    } else {
+      r0DilSubEl.textContent = '% equity sold in R0 (0% if unset)';
     }
 
     // Update dynamic monthly helper caption
@@ -1430,6 +1551,124 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         `Evaluated across ${dilListStr} dilution scenarios.`,
         false,
         'VC Benchmark (20%, 25%, 33% + step-down)',
+        openTraces
+      );
+    }
+
+    // Render Ask vs. Dilution Sensitivity Heatmap
+    const heatmapTraceWrap = root.querySelector<HTMLElement>('#heatmap-trace-wrap')!;
+    const heatmap = computeAskDilutionHeatmap(state.input);
+    if (!heatmap.available) {
+      heatmapWrap.innerHTML =
+        '<p class="vc-hm-empty">Enter positive current revenue and valid R1/R2 assumptions above to view the Ask vs. Dilution sensitivity grid.</p>';
+      heatmapTraceWrap.innerHTML = '';
+    } else {
+      const hmColsHtml = heatmap.dilutions
+        .map((d) => {
+          const isCurCol = Math.abs(d - heatmap.currentDilutionPct) < 0.05;
+          return `<th scope="col" class="vc-hm-col-head${isCurCol ? ' is-current-col' : ''}">${escapeHtml(formatPercent(d, 1))}${isCurCol ? ' (yours)' : ''}</th>`;
+        })
+        .join('');
+
+      const hmRowsHtml = heatmap.rows
+        .map((row) => {
+          const askLabel = formatMoney(row.ask, state.unit);
+          const rowHead = `<th scope="row" class="vc-hm-row-head${row.isCurrentAsk ? ' is-current-row' : ''}">${escapeHtml(askLabel)}${row.isCurrentAsk ? '<span class="vc-hm-now">Current ask</span>' : ''}</th>`;
+          const cellsHtml = row.cells
+            .map((cell) => {
+              const clsParts = ['vc-hm-cell', `vc-hm-cell--${cell.level}`];
+              if (cell.isCurrent) clsParts.push('vc-hm-cell--current');
+              const cagrLabel = `${formatPercent(cell.impliedCagrPct, 0)}/yr`;
+              const metaLabel = `${formatMultiple(cell.requiredGrowthMultiple, 1)} · ${formatMoney(cell.postMoney, state.unit)}`;
+              const ariaLabel = `Set R1 ask to ${formatMoney(cell.ask, state.unit)} at ${formatPercent(cell.dilutionPct, 1)} dilution: ${cagrLabel} CAGR, ${cell.level}`;
+              return `
+                <td>
+                  <button
+                    type="button"
+                    class="${clsParts.join(' ')}"
+                    data-ask="${cell.ask}"
+                    data-dil="${cell.dilutionPct}"
+                    aria-current="${cell.isCurrent ? 'true' : 'false'}"
+                    aria-label="${escapeXml(ariaLabel)}"
+                  >
+                    <span class="vc-hm-cagr">${escapeXml(cagrLabel)}</span>
+                    <span class="vc-hm-meta">${escapeXml(metaLabel)}</span>
+                  </button>
+                </td>
+              `;
+            })
+            .join('');
+          return `<tr>${rowHead}${cellsHtml}</tr>`;
+        })
+        .join('');
+
+      heatmapWrap.innerHTML = `
+        <table class="vc-heatmap-table" aria-label="Ask vs. dilution sensitivity grid">
+          <thead>
+            <tr>
+              <th scope="col" class="vc-hm-corner">R1 Ask \\ Dilution</th>
+              ${hmColsHtml}
+            </tr>
+          </thead>
+          <tbody>
+            ${hmRowsHtml}
+          </tbody>
+        </table>
+      `;
+
+      heatmapTraceWrap.innerHTML = renderTraceDetails(
+        'heatmap_trace',
+        'Required R2 ARR = ((Ask ÷ Dilution) × R2 Step-Up) ÷ R2 Multiple · CAGR = ((Required R2 ARR ÷ Current ARR) ^ (12 ÷ Months)) − 1',
+        `Evaluated ${heatmap.rows.length} ask levels against ${heatmap.dilutions.map((d) => formatPercent(d, 1)).join(', ')} dilution over ${formatNumber(safeMonths, 0)} months.`,
+        false,
+        `Reachable ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr · Stretch ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`,
+        openTraces
+      );
+    }
+
+    // Render Founder Ownership Waterfall inside R0 & ESOP drawer
+    const wfEl = root.querySelector<HTMLElement>('#ownership-waterfall')!;
+    const wfSummaryEl = root.querySelector<HTMLElement>('#ownership-summary')!;
+    const capTableEl = root.querySelector<HTMLElement>('#ownership-captable')!;
+    const wfTraceWrap = root.querySelector<HTMLElement>('#ownership-trace-wrap')!;
+
+    wfEl.innerHTML = renderOwnershipWaterfallSvg(output);
+    if (!waterfall.valid) {
+      wfSummaryEl.className = 'chip chip--closed';
+      wfSummaryEl.textContent = 'Check dilution inputs';
+      capTableEl.innerHTML = '';
+      wfTraceWrap.innerHTML = '';
+    } else {
+      wfSummaryEl.className =
+        waterfall.founderPostR2Pct >= 50 ? 'chip chip--open' : 'chip chip--soon';
+      wfSummaryEl.textContent = `${formatPercent(waterfall.founderPreR1Pct, 1)} pre-R1 → ${formatPercent(waterfall.founderPostR1Pct, 1)} R1 → ${formatPercent(waterfall.founderPostR2Pct, 1)} R2`;
+
+      const capPills: string[] = [
+        `<div class="vc-captable-pill"><span class="cl">Founders (Post R1)</span><span class="cv">${escapeHtml(formatPercent(waterfall.founderPostR1Pct, 1))}</span></div>`,
+      ];
+      if (waterfall.r0DilutionPct > 0) {
+        capPills.push(
+          `<div class="vc-captable-pill"><span class="cl">R0 investors${waterfall.r0DilutionIsAssumed ? ' (est.)' : ''}</span><span class="cv">${escapeHtml(formatPercent(waterfall.r0InvestorPostR1Pct, 1))}</span></div>`
+        );
+      }
+      if (waterfall.esopTopUpPct > 0) {
+        capPills.push(
+          `<div class="vc-captable-pill"><span class="cl">R1 ESOP pool</span><span class="cv">${escapeHtml(formatPercent(waterfall.esopTopUpPct, 1))}</span></div>`
+        );
+      }
+      capPills.push(
+        `<div class="vc-captable-pill"><span class="cl">R1 investors</span><span class="cv">${escapeHtml(formatPercent(waterfall.r1DilutionPct, 1))}</span></div>`
+      );
+      capTableEl.innerHTML = capPills.join('');
+
+      wfTraceWrap.innerHTML = renderTraceDetails(
+        'ownership_waterfall_trace',
+        'Founder Post-R1 = (100% − R0 %) × (1 − (ESOP % + R1 %) ÷ 100) · Founder Post-R2 = Founder Post-R1 × (1 − R2 % ÷ 100)',
+        `Pre-R1 ${formatPercent(waterfall.founderPreR1Pct, 1)} -> after ${formatPercent(waterfall.esopTopUpPct, 1)} ESOP and ${formatPercent(waterfall.r1DilutionPct, 1)} R1 = ${formatPercent(waterfall.founderPostR1Pct, 1)} -> after ${formatPercent(waterfall.r2DilutionPct, 1)} illustrative R2 = ${formatPercent(waterfall.founderPostR2Pct, 1)}`,
+        waterfall.r0DilutionIsAssumed || state.input.nextRoundDilutionPct === undefined,
+        waterfall.r0DilutionIsAssumed
+          ? 'Tool Assumption (15% R0 est. + illustrative R2 %)'
+          : 'Tool Assumption (illustrative R2 dilution %)',
         openTraces
       );
     }

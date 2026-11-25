@@ -215,6 +215,19 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     await expect(page.locator('[data-metric-id="fundingGap"] .v')).toHaveText('Not set');
     await expect(page.locator('#gs-output .sv')).toHaveText('₹18.9 Cr');
 
+    // Verify Ask vs. Dilution Sensitivity Heatmap renders Reachable/Stretch/Stiff cells and one active cell
+    await expect(page.locator('#heatmap-card')).toBeVisible();
+    const hmCount = await page.locator('#heatmap-card button.vc-hm-cell').count();
+    expect(hmCount).toBeGreaterThanOrEqual(20);
+    expect(await page.locator('#heatmap-card button.vc-hm-cell--reachable').count()).toBeGreaterThan(0);
+    expect(await page.locator('#heatmap-card button.vc-hm-cell--stretch').count()).toBeGreaterThan(0);
+    expect(await page.locator('#heatmap-card button.vc-hm-cell--stiff').count()).toBeGreaterThan(0);
+    await expect(page.locator('#heatmap-card button.vc-hm-cell[aria-current="true"]')).toHaveCount(1);
+    await expect(page.locator('#heatmap-card button.vc-hm-cell[aria-current="true"]')).toContainText('298%/yr');
+
+    // Ownership waterfall stays collapsed inside R0 & ESOP drawer by default
+    await expect(page.locator('#ownership-waterfall')).toBeHidden();
+
     // Capture above-the-fold screenshot
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({
@@ -246,6 +259,44 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     expect(headerBytes[1]).toBe(0x4b);
     expect(headerBytes[2]).toBe(0x03);
     expect(headerBytes[3]).toBe(0x04);
+
+    // 7b. Click a Reachable cell in the heatmap -> applies Ask & Dilution and moves active highlight
+    const reachCell = page.locator('#heatmap-card button.vc-hm-cell--reachable').first();
+    const targetAsk = await reachCell.getAttribute('data-ask');
+    const targetDil = await reachCell.getAttribute('data-dil');
+    await reachCell.click();
+    await expect(page.locator('#ask')).toHaveValue(targetAsk!);
+    await expect(page.locator('#dil')).toHaveValue(targetDil!);
+    await expect(page.locator('#vbadge')).toHaveText('Reachable');
+    await expect(
+      page.locator(`#heatmap-card button.vc-hm-cell[data-ask="${targetAsk}"][data-dil="${targetDil}"]`)
+    ).toHaveAttribute('aria-current', 'true');
+
+    // 7c. Expand R0 & ESOP drawer -> verify Ownership Waterfall SVG + live updates
+    await page.locator('#settings-drawer > summary').click();
+    await expect(page.locator('#ownership-waterfall svg')).toBeVisible();
+    await expect(page.locator('#ownership-waterfall svg')).toContainText('Post R1');
+    await expect(page.locator('#ownership-waterfall svg')).toContainText('Post R2');
+
+    await page.locator('#dil').fill('20');
+    await page.locator('#prior').fill('10');
+    await page.locator('#r0-dil').fill('15');
+    await page.locator('#esop').fill('10');
+    await page.locator('#r2-dil').fill('20');
+    await expect(page.locator('#ownership-waterfall svg')).toContainText('R0 round');
+    await expect(page.locator('#ownership-waterfall svg')).toContainText('R1 ESOP');
+    await expect(page.locator('#ownership-waterfall svg')).toContainText('59.5%');
+    await expect(page.locator('#ownership-waterfall svg')).toContainText('47.6%');
+    await expect(page.locator('#ownership-captable')).toContainText('10.5%');
+
+    const badStyles = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[style]'))
+        .filter((el) => (el.getAttribute('style') || '').trim().length > 0)
+        .map((el) => `${el.tagName}#${el.id}.${String(el.className)}:${el.getAttribute('style')}`)
+    );
+    expect(badStyles).toEqual([]);
+    const postDrawerText = await page.evaluate(() => document.body.innerText);
+    expect(postDrawerText).not.toContain('—');
 
     // 8. Open Examples panel, switch to Example B, and test CAGR horizon sensitivity (18 mo vs 12 mo)
     await page.locator('#examples-panel > summary').click();
