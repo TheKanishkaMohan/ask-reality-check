@@ -295,8 +295,33 @@ describe('Share & Export — Markdown Summary, XLSX Workbook & URL State Seriali
     expect(buildXlsxFilename(presetB.input, 'INR_CR')).toBe('valuation-check-20-cr.xlsx');
   });
 
-  it('serializes state into compact URL query parameters', () => {
+  it('serializes only non-default delta state into compact shareable URL query parameters', () => {
     const presetA = PRESET_SCENARIOS.find((p) => p.id === 'a')!;
+    const presetB = PRESET_SCENARIOS.find((p) => p.id === 'b')!;
+
+    // Default Preset A -> clean root URL with zero query parameters
+    expect(
+      buildQueryString({
+        unit: presetA.unit,
+        activePresetId: 'a',
+        input: { ...presetA.input },
+        goalSeekTarget: 'max_ask',
+        goalSeekGrowth: presetA.input.verdictBands.reachableMax,
+      })
+    ).toBe('');
+
+    // Non-default Preset B -> single p=b parameter
+    expect(
+      buildQueryString({
+        unit: presetB.unit,
+        activePresetId: 'b',
+        input: { ...presetB.input },
+        goalSeekTarget: 'max_ask',
+        goalSeekGrowth: presetB.input.verdictBands.reachableMax,
+      })
+    ).toBe('p=b');
+
+    // Custom values -> emit only parameters that differ from Default A
     const qs = buildQueryString({
       unit: 'USD_M',
       activePresetId: null,
@@ -311,6 +336,11 @@ describe('Share & Export — Markdown Summary, XLSX Workbook & URL State Seriali
     expect(qs).toContain('priced=0');
     expect(qs).toContain('gst=required_revenue');
     expect(qs).toContain('gsg=3.5');
+    expect(qs).not.toContain('dil=20');
+    expect(qs).not.toContain('rev=9');
+    expect(qs).not.toContain('step=2');
+    expect(qs).not.toContain('mult=7');
+    expect(qs).not.toContain('m=18');
   });
 });
 
@@ -390,7 +420,10 @@ describe('Ask vs. Dilution Sensitivity Heatmap & Founder Ownership Waterfall', (
     expect(levels.has('stiff')).toBe(true);
 
     const customHeatmap = computeAskDilutionHeatmap(makeInput({ dilutionPct: 12 }));
-    expect(customHeatmap.dilutions).toEqual([12, 15, 20, 25, 30]);
+    expect(customHeatmap.dilutions).toEqual([5, 12, 20, 25]);
+
+    const highDilHeatmap = computeAskDilutionHeatmap(makeInput({ dilutionPct: 33 }));
+    expect(highDilHeatmap.dilutions).toEqual([20, 25, 30, 33]);
 
     const zeroRevHeatmap = computeAskDilutionHeatmap(makeInput({ annualRevenue: 0 }));
     expect(zeroRevHeatmap.available).toBe(false);

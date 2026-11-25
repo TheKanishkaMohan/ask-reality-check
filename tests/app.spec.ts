@@ -29,6 +29,7 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     });
 
     await page.goto('/');
+    expect(new URL(page.url()).search).toBe('');
 
     // 1. Verify Topbar (consistent with funding.kanishkamohan.com + Tools dropdown), Footer, Hero, and single Sajith Pai footnote
     await expect(page.locator('header.topbar .brand-wordmark')).toHaveText('TheKanishkaMohan');
@@ -160,15 +161,20 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     );
     expect(desktopOverflow).toBe(false);
 
-    const sensTableFits = await page.evaluate(() => {
-      const wrap = document.querySelector('#sens')?.parentElement;
+    const heatmapDesktopFits = await page.evaluate(() => {
+      const wrap = document.querySelector('#heatmap-wrap');
       return wrap ? wrap.scrollWidth <= wrap.clientWidth + 1 : false;
     });
-    expect(sensTableFits).toBe(true);
+    expect(heatmapDesktopFits).toBe(true);
     await expect(page.locator('#burn-bar')).toBeHidden();
 
-    // 5. Verify Example A charts and 3-card non-redundant signals strip
-    await expect(page.locator('#vh')).toContainText('Stiff: 7.9x revenue growth needed in 18 months (298%/yr CAGR)');
+    // 5. Verify Verdict card structure, Example A charts and 3-card non-redundant signals strip
+    await expect(page.locator('#verdict-box .vc-eyebrow')).toHaveText('Verdict');
+    await expect(page.locator('#vbadge')).toHaveText('Stiff');
+    await expect(page.locator('#vh')).toHaveText('7.9x revenue growth needed in 18 months');
+    await expect(page.locator('#verdict-stats')).toContainText('298%/yr');
+    await expect(page.locator('#verdict-stats')).toContainText('₹250 Cr post');
+    await expect(page.locator('#verdict-stats')).toContainText('₹500 Cr pre');
 
     // Charts show R1 Pre > R1 Ask > R1 Post > R2 Pre order, ₹250 Cr, ₹500 Cr, ₹71.4 Cr, multiples & CAGR gauge
     await expect(page.locator('#valuation-chart svg')).toBeVisible();
@@ -298,10 +304,12 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     const postDrawerText = await page.evaluate(() => document.body.innerText);
     expect(postDrawerText).not.toContain('—');
 
-    // 8. Open Examples panel, switch to Example B, and test CAGR horizon sensitivity (18 mo vs 12 mo)
+    // 8. Open Examples panel, switch to Example B, and test URL sharing + CAGR horizon sensitivity
     await page.locator('#examples-panel > summary').click();
     await page.locator('button[data-id="b"]').click();
-    await expect(page.locator('#vh')).toContainText('Reachable: 2.8x revenue growth needed in 18 months');
+    expect(new URL(page.url()).search).toBe('?p=b');
+    await expect(page.locator('#vbadge')).toHaveText('Reachable');
+    await expect(page.locator('#vh')).toHaveText('2.8x revenue growth needed in 18 months');
     await expect(page.locator('[data-metric-id="impliedPostRevenueMultiple"] .v')).toHaveText(
       '6.7x pre · 8.3x post'
     );
@@ -309,14 +317,27 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     await expect(page.locator('#burn-bar')).toBeVisible();
 
     await page.locator('#months').fill('12');
-    await expect(page.locator('#vh')).toContainText('Stretch: 2.8x revenue growth needed in 12 months (178%/yr CAGR)');
+    await expect(page.locator('#vbadge')).toHaveText('Stretch');
+    await expect(page.locator('#vh')).toHaveText('2.8x revenue growth needed in 12 months');
+    expect(new URL(page.url()).search).not.toContain('dil=20');
+    expect(new URL(page.url()).search).not.toContain('step=2');
 
     // 9. Switch to Example C, Goal-Seek Apply, and Unit Switcher
     await page.locator('button[data-id="c"]').click();
-    await expect(page.locator('#vh')).toContainText('Stiff: 5.6x revenue growth needed');
+    await expect(page.locator('#vbadge')).toHaveText('Stiff');
+    await expect(page.locator('#vh')).toHaveText('5.6x revenue growth needed in 18 months');
     await expect(page.locator('#gs-output .sv')).toHaveText('₹81 Cr');
     await page.locator('#apply-goalseek-btn').click();
-    await expect(page.locator('#vh')).toContainText('Reachable: 3x revenue growth needed');
+    await expect(page.locator('#vbadge')).toHaveText('Reachable');
+    await expect(page.locator('#vh')).toHaveText('3x revenue growth needed in 18 months');
+
+    // Expand full valuation table drawer in INR Cr and verify table fits cleanly on desktop
+    await page.locator('#sens-detail-drawer > summary').click();
+    const sensTableFits = await page.evaluate(() => {
+      const wrap = document.querySelector('#sens')?.parentElement;
+      return wrap ? wrap.scrollWidth <= wrap.clientWidth + 1 : false;
+    });
+    expect(sensTableFits).toBe(true);
 
     await page.locator('button[data-unit="INR_LAKH"]').click();
     await expect(page.locator('#ask')).toHaveValue('8100');
@@ -326,12 +347,19 @@ test.describe('Valuation Check — Charts, CAGR Verdicts, Sector Drawer & XLSX V
     await expect(page.locator('#sens')).toContainText('5%');
     await expect(page.locator('#sens')).toContainText('12% (yours)');
 
-    // 10. Verify zero horizontal overflow on mobile (390x844), including with Tools dropdown and (i) tooltip open
-    await page.setViewportSize({ width: 390, height: 844 });
-    const mobileOverflow = await page.evaluate(
-      () => document.documentElement.scrollWidth > document.documentElement.clientWidth
-    );
-    expect(mobileOverflow).toBe(false);
+    // 10. Verify zero horizontal overflow on mobile (390px and 360px), including grid fit & Tools dropdown
+    for (const width of [390, 360]) {
+      await page.setViewportSize({ width, height: 844 });
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+      );
+      expect(overflow).toBe(false);
+      const gridOverflow = await page.evaluate(() => {
+        const wrap = document.querySelector('#heatmap-wrap');
+        return wrap ? wrap.scrollWidth > wrap.clientWidth + 1 : true;
+      });
+      expect(gridOverflow).toBe(false);
+    }
 
     await page.locator('#nav-tools > summary').click();
     await expect(page.locator('#nav-tools')).toHaveAttribute('open', '');

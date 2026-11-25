@@ -1021,13 +1021,6 @@ h3 {
   gap: 16px;
 }
 
-.vc-verdict-top {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 .vc-verdict-title {
   font-family: var(--font-serif);
   font-weight: 400;
@@ -1035,14 +1028,45 @@ h3 {
   line-height: 1.25;
   color: var(--text);
   margin: 0;
-  flex: 1 1 260px;
 }
 
-.vc-verdict-badges {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.vc-verdict-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vc-verdict-stat {
+  background: var(--bg-band);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-control);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.vc-verdict-stat .sl {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.vc-verdict-stat .sv {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.vc-verdict-stat .ss {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .vc-reasons {
@@ -1060,10 +1084,18 @@ h3 {
   line-height: 1.5;
   color: var(--text);
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+}
+
+.vc-reason-tag {
+  flex-shrink: 0;
+}
+
+.vc-reason-text {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .vc-reason-item:first-child {
@@ -1073,6 +1105,15 @@ h3 {
 
 .vc-reason-item:last-child {
   padding-bottom: 0;
+}
+
+.vc-verdict-foot {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
 }
 
 /* ---------- visual charts row ---------- */
@@ -1608,12 +1649,31 @@ details.trace[open] summary::before {
   font-size: 13.5px;
 }
 
+.vc-heatmap-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.vc-detail-table-wrap {
+  margin-top: 8px;
+}
+
+.vc-detail-table-wrap .vc-table--num th,
+.vc-detail-table-wrap .vc-table--num td {
+  padding: 7px 5px;
+  font-size: 12px;
+}
+
 .vc-heatmap-table {
   width: 100%;
-  min-width: 560px;
+  table-layout: fixed;
   border-collapse: separate;
-  border-spacing: 6px;
+  border-spacing: 5px;
   font-variant-numeric: tabular-nums;
+}
+
+.vc-hm-col-ask {
+  width: 78px;
 }
 
 .vc-heatmap-table th,
@@ -1625,8 +1685,8 @@ details.trace[open] summary::before {
 
 .vc-hm-corner,
 .vc-hm-col-head {
-  padding: 6px 8px;
-  font: 600 12px/1.3 var(--font-sans);
+  padding: 6px 4px;
+  font: 600 11.5px/1.25 var(--font-sans);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-2);
@@ -1637,7 +1697,7 @@ details.trace[open] summary::before {
 
 .vc-hm-corner {
   text-align: left;
-  min-width: 112px;
+  padding: 6px 8px;
 }
 
 .vc-hm-col-head.is-current-col {
@@ -1646,13 +1706,15 @@ details.trace[open] summary::before {
 }
 
 .vc-hm-row-head {
-  padding: 8px 10px;
+  padding: 8px;
   text-align: left;
-  font: 600 13px/1.25 var(--font-sans);
+  font: 600 12.5px/1.25 var(--font-sans);
   color: var(--text);
   background: var(--bg-band);
   border-radius: 6px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .vc-hm-row-head.is-current-row {
@@ -1663,15 +1725,16 @@ details.trace[open] summary::before {
 .vc-hm-now {
   display: block;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
   color: var(--eq-text);
 }
 
 .vc-hm-cell {
   width: 100%;
-  min-height: 54px;
-  padding: 7px 10px;
+  max-width: 100%;
+  min-height: 52px;
+  padding: 6px 4px;
   border-radius: var(--r-control);
   border: 1px solid var(--hairline-band);
   display: flex;
@@ -1682,6 +1745,7 @@ details.trace[open] summary::before {
   cursor: pointer;
   text-align: center;
   font-family: var(--font-sans);
+  overflow: hidden;
   transition: transform 0.08s ease, box-shadow 0.12s ease;
 }
 
@@ -1720,17 +1784,20 @@ details.trace[open] summary::before {
 }
 
 .vc-hm-cagr {
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1.2;
 }
 
 .vc-hm-meta {
-  font-size: 11.5px;
+  font-size: 10.5px;
   font-weight: 500;
-  line-height: 1.25;
+  line-height: 1.2;
   opacity: 0.92;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- founder ownership waterfall (inside R0 & ESOP drawer) ---------- */
@@ -1982,11 +2049,78 @@ details.trace[open] summary::before {
     margin-left: auto;
   }
   .vc-card {
-    padding: 16px;
+    padding: 14px;
+  }
+  .vc-verdict-stats {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    background: var(--bg-band);
+    border: 1px solid var(--hairline);
+    border-radius: var(--r-control);
+    overflow: hidden;
+  }
+  .vc-verdict-stat {
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--hairline);
+    border-radius: 0;
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: baseline;
+    column-gap: 10px;
+  }
+  .vc-verdict-stat:first-child {
+    border-top: 0;
+  }
+  .vc-verdict-stat .sl {
+    grid-row: 1 / 3;
+    align-self: center;
+  }
+  .vc-verdict-stat .sv {
+    text-align: right;
+    font-size: 17px;
+  }
+  .vc-verdict-stat .ss {
+    text-align: right;
+    font-size: 11.5px;
+  }
+  .vc-reason-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .vc-heatmap-table {
+    border-spacing: 3px;
+  }
+  .vc-hm-col-ask {
+    width: 52px;
+  }
+  .vc-hm-corner,
+  .vc-hm-col-head {
+    padding: 5px 3px;
+    font-size: 10.5px;
+  }
+  .vc-hm-row-head {
+    padding: 6px 4px;
+    font-size: 11px;
+  }
+  .vc-hm-yours,
+  .vc-hm-now,
+  .vc-hm-unit,
+  .vc-hm-post {
+    display: none;
   }
   .vc-hm-cell {
-    min-height: 50px;
-    padding: 6px 8px;
+    min-height: 44px;
+    padding: 5px 2px;
+  }
+  .vc-hm-cagr {
+    font-size: 12px;
+  }
+  .vc-hm-meta {
+    font-size: 10.5px;
   }
   .vc-captable-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));

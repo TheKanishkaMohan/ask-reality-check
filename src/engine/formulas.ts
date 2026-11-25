@@ -1014,13 +1014,37 @@ export function computeAskDilutionHeatmap(input: CheckInput): AskDilutionHeatmap
     };
   }
 
-  const colSet = [15, 20, 25, 30];
-  if (!colSet.some((d) => Math.abs(d - input.dilutionPct) < 0.05)) {
-    colSet.push(Number(input.dilutionPct.toFixed(1)));
+  const d = Number(input.dilutionPct.toFixed(1));
+  const baseCols = [15, 20, 25, 30];
+  let candidates: number[];
+  if (baseCols.some((c) => Math.abs(c - d) < 0.05)) {
+    candidates = baseCols;
+  } else if (d < 15) {
+    const stepDown =
+      d >= 10
+        ? Math.floor((d - 5) / 5) * 5
+        : d > 5
+          ? 5
+          : Math.max(1, Math.floor(d / 2));
+    candidates = [stepDown, d, 20, 25, 15, 30];
+  } else if (d > 30) {
+    candidates = [20, 25, 30, d];
+  } else {
+    candidates = [20, 25, d, d < 22.5 ? 15 : 30];
   }
-  const dilutions = colSet
-    .filter((d) => d > 0 && d + input.esopTopUpPct < 100)
-    .sort((a, b) => a - b);
+
+  const colSet: number[] = [];
+  for (const c of candidates) {
+    if (
+      c > 0 &&
+      c + input.esopTopUpPct < 100 &&
+      !colSet.some((existing) => Math.abs(existing - c) < 0.05)
+    ) {
+      colSet.push(c);
+      if (colSet.length >= 4) break;
+    }
+  }
+  const dilutions = colSet.sort((a, b) => a - b);
 
   const band = computeFeasibleAskBand(input);
   const effBands = computeEffectiveVerdictBands(input);

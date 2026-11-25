@@ -551,15 +551,14 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
 
           <section class="vc-results-stack" aria-label="Results" aria-live="polite" id="results-panel">
             <div class="vc-card vc-verdict-card" id="verdict-box">
-              <div class="vc-verdict-top">
+              <div class="vc-card__head">
+                <p class="vc-eyebrow">Verdict</p>
                 <span class="chip chip--open" id="vbadge">Reachable</span>
-                <h3 class="vc-verdict-title" id="vh"></h3>
-                <div class="vc-verdict-badges">
-                  <span class="chip chip--rolling" id="vc-pace-chip" hidden></span>
-                  <span class="chip chip--primary" id="verdict-band-badge">Reachable ≤108%/yr · Stretch ≤192%/yr</span>
-                </div>
               </div>
+              <h3 class="vc-verdict-title" id="vh"></h3>
+              <div class="vc-verdict-stats" id="verdict-stats"></div>
               <ul class="vc-reasons" id="vreasons"></ul>
+              <p class="vc-verdict-foot" id="verdict-band-badge"></p>
             </div>
 
             <div class="vc-charts-grid">
@@ -626,34 +625,27 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                 <div class="vc-solver-output" id="gs-output"></div>
               </div>
 
-              <div class="vc-card">
+              <div class="vc-card" id="heatmap-card" aria-label="Ask vs. dilution sensitivity grid">
                 <div class="vc-card__head">
-                  <p class="vc-eyebrow">If the dilution were different</p>
+                  <div>
+                    <p class="vc-eyebrow">Ask vs. dilution sensitivity</p>
+                    <small class="vc-hint">Click any cell to apply R1 ask &amp; dilution.</small>
+                  </div>
+                  <div class="vc-heatmap-legend" aria-label="Grid legend">
+                    <span class="chip chip--open">Reachable</span>
+                    <span class="chip chip--soon">Stretch</span>
+                    <span class="chip chip--closed">Stiff</span>
+                  </div>
                 </div>
-                <div class="vc-scroll">
-                  <table class="vc-table vc-table--num" id="sens" aria-label="Dilution sensitivity table"></table>
-                </div>
-                <div id="sens-trace-wrap"></div>
-                <p class="vc-footnote">
-                  Lower dilution raises your R1 valuation and makes R2 harder to clear. Early rounds usually land around 20% to 25%.
-                </p>
+                <div id="heatmap-wrap" class="vc-heatmap-wrap"></div>
+                <details class="trace" id="sens-detail-drawer" data-trace-id="sens_detail_drawer">
+                  <summary>Full valuation table at current ask</summary>
+                  <div class="vc-scroll vc-detail-table-wrap">
+                    <table class="vc-table vc-table--num" id="sens" aria-label="Dilution sensitivity table"></table>
+                  </div>
+                </details>
+                <div id="heatmap-trace-wrap"></div>
               </div>
-            </div>
-
-            <div class="vc-card" id="heatmap-card" aria-label="Ask vs. dilution sensitivity grid">
-              <div class="vc-card__head">
-                <div>
-                  <p class="vc-eyebrow">Ask vs. dilution sensitivity grid</p>
-                  <small class="vc-hint">Required annual CAGR and growth multiple across asks and dilutions. Click any cell to apply.</small>
-                </div>
-                <div class="vc-heatmap-legend" aria-label="Grid legend">
-                  <span class="chip chip--open">Reachable</span>
-                  <span class="chip chip--soon">Stretch</span>
-                  <span class="chip chip--closed">Stiff</span>
-                </div>
-              </div>
-              <div class="vc-scroll" id="heatmap-wrap"></div>
-              <div id="heatmap-trace-wrap"></div>
             </div>
           </section>
 
@@ -1169,35 +1161,83 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
 
     const { metrics, effectiveVerdictBands } = output;
 
-    // Update verdict band badge
-    root.querySelector('#verdict-band-badge')!.textContent =
-      `Reachable ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr · Stretch ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`;
-
-    // Update Goal-Seek implied CAGR hint
-    const safeMonths = Math.max(1, Number.isFinite(state.input.monthsToNextRound) ? state.input.monthsToNextRound : 18);
+    // Render Verdict
+    const safeMonths = Math.max(
+      1,
+      Number.isFinite(state.input.monthsToNextRound) ? state.input.monthsToNextRound : 18
+    );
     const gsCagrPct = (Math.pow(state.goalSeekGrowth, 12 / safeMonths) - 1) * 100;
     root.querySelector('#gs-growth-hint')!.textContent =
       `Required CAGR: ${formatPercent(gsCagrPct, 0)}/yr over ${formatNumber(safeMonths, 0)} mo`;
 
-    // Render Verdict
     const vbadge = root.querySelector<HTMLElement>('#vbadge')!;
     const vh = root.querySelector<HTMLElement>('#vh')!;
-    const paceChip = root.querySelector<HTMLElement>('#vc-pace-chip')!;
+    const verdictStatsEl = root.querySelector<HTMLElement>('#verdict-stats')!;
     const vreasons = root.querySelector<HTMLElement>('#vreasons')!;
+    const verdictFootEl = root.querySelector<HTMLElement>('#verdict-band-badge')!;
 
     const badgeSpec = VERDICT_BADGE_MAP[output.verdict.level];
     vbadge.className = badgeSpec.cls;
     vbadge.textContent = badgeSpec.label;
-    vh.textContent = output.verdict.headline;
 
-    if (metrics.impliedCagrPct.value !== null && metrics.impliedCmgrPct.value !== null) {
-      paceChip.hidden = false;
-      paceChip.textContent = `${formatPercent(metrics.impliedCagrPct.value, 0)}/yr · ${formatPercent(metrics.impliedCmgrPct.value, 1)}/mo`;
+    vh.textContent =
+      output.validation.valid &&
+      state.input.annualRevenue > 0 &&
+      metrics.requiredGrowthMultiple.value !== null
+        ? `${formatMultiple(metrics.requiredGrowthMultiple.value, 1)} revenue growth needed in ${formatNumber(safeMonths, 0)} months`
+        : output.verdict.headline;
+
+    if (output.validation.valid) {
+      const cagrPct = metrics.impliedCagrPct.value;
+      const cmgrPct = metrics.impliedCmgrPct.value;
+      const postMultV = metrics.impliedPostRevenueMultiple.value;
+      const r1Sub =
+        postMultV !== null
+          ? `${metrics.impliedPreMoney.formattedValue} pre · ${formatMultiple(postMultV, 1)}`
+          : `${metrics.impliedPreMoney.formattedValue} pre`;
+
+      verdictStatsEl.hidden = false;
+      verdictStatsEl.innerHTML = `
+        <div class="vc-verdict-stat">
+          <span class="sl">Required CAGR</span>
+          <span class="sv">${escapeHtml(cagrPct !== null ? `${formatPercent(cagrPct, 0)}/yr` : 'Add ARR')}</span>
+          <span class="ss">${escapeHtml(cmgrPct !== null ? `${formatPercent(cmgrPct, 1)}/mo` : 'needed for CAGR')}</span>
+        </div>
+        <div class="vc-verdict-stat">
+          <span class="sl">R1 valuation</span>
+          <span class="sv">${escapeHtml(`${metrics.impliedPostMoney.formattedValue} post`)}</span>
+          <span class="ss">${escapeHtml(r1Sub)}</span>
+        </div>
+        <div class="vc-verdict-stat">
+          <span class="sl">R2 target</span>
+          <span class="sv">${escapeHtml(`${metrics.nextRoundPreMoney.formattedValue} pre`)}</span>
+          <span class="ss">${escapeHtml(`${metrics.requiredNextAnnualRevenue.formattedValue} ARR at ${formatMultiple(state.input.nextRoundMultiple, 1)}`)}</span>
+        </div>
+      `;
     } else {
-      paceChip.hidden = true;
+      verdictStatsEl.hidden = true;
+      verdictStatsEl.innerHTML = '';
     }
 
-    vreasons.innerHTML = output.verdict.reasons
+    const reasonTag = (id: string): string => {
+      if (id === 'multiple_compression') return 'Multiple drop';
+      if (id === 'no_compression') return 'Multiple check';
+      if (id === 'funding_shortfall') return 'Burn shortfall';
+      if (id === 'funding_buffer') return 'Burn cushion';
+      if (id === 'funding_exact') return 'Burn plan';
+      if (id.startsWith('prior_raise')) return 'R0 raise';
+      if (id === 'esop_impact') return 'ESOP pool';
+      if (id === 'horizon_outside_benchmark') return 'Runway';
+      if (id === 'missing_revenue') return 'Next step';
+      if (id === 'valuation_signal') return 'R1 vs. R2';
+      return 'Check';
+    };
+
+    const reasonsToShow = output.verdict.reasons.filter(
+      (r) => !(r.id === 'valuation_signal' && state.input.annualRevenue > 0)
+    );
+
+    vreasons.innerHTML = reasonsToShow
       .map((r) => {
         const chipClass = r.isAssumption
           ? 'chip chip--primary'
@@ -1210,12 +1250,14 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                 : 'chip chip--rolling';
         return `
           <li class="vc-reason-item" data-tone="${escapeHtml(r.tone)}">
-            <span>${escapeHtml(r.text)}</span>
-            <span class="${chipClass}">${escapeHtml(r.origin)}</span>
+            <span class="${chipClass} vc-reason-tag">${escapeHtml(reasonTag(r.id))}</span>
+            <span class="vc-reason-text">${escapeHtml(r.text)}</span>
           </li>
         `;
       })
       .join('');
+
+    verdictFootEl.textContent = `Thresholds: Reachable ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr CAGR · Stretch ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr CAGR`;
 
     // Render Visual Charts
     const valChartEl = root.querySelector<HTMLElement>('#valuation-chart')!;
@@ -1493,14 +1535,15 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       });
     }
 
-    // Render Sensitivity Table
+    // Render Detail Sensitivity Table (inside collapsible drawer) & Ask vs. Dilution Grid
+    const sensDrawer = root.querySelector<HTMLDetailsElement>('#sens-detail-drawer')!;
     const sensTable = root.querySelector<HTMLElement>('#sens')!;
-    const sensTraceWrap = root.querySelector<HTMLElement>('#sens-trace-wrap')!;
 
     if (output.sensitivity.length === 0) {
+      sensDrawer.hidden = true;
       sensTable.innerHTML = '';
-      sensTraceWrap.innerHTML = '';
     } else {
+      sensDrawer.hidden = false;
       const headerHtml = `
         <thead>
           <tr>
@@ -1542,20 +1585,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         .join('');
 
       sensTable.innerHTML = `${headerHtml}<tbody>${rowsHtml}</tbody>`;
-      const dilListStr = output.sensitivity
-        .map((r) => `${formatPercent(r.dilutionPct, 1)}${r.isUserSelected ? ' (yours)' : ''}`)
-        .join(', ');
-      sensTraceWrap.innerHTML = renderTraceDetails(
-        'sens_table_trace',
-        'For each dilution d%: R1 Post = R1 Ask ÷ (d/100); R2 Pre = R1 Post × Step-Up; Growth = (R2 Pre ÷ R2 Multiple) ÷ Current ARR',
-        `Evaluated across ${dilListStr} dilution scenarios.`,
-        false,
-        'VC Benchmark (20%, 25%, 33% + step-down)',
-        openTraces
-      );
     }
 
-    // Render Ask vs. Dilution Sensitivity Heatmap
     const heatmapTraceWrap = root.querySelector<HTMLElement>('#heatmap-trace-wrap')!;
     const heatmap = computeAskDilutionHeatmap(state.input);
     if (!heatmap.available) {
@@ -1563,24 +1594,26 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         '<p class="vc-hm-empty">Enter positive current revenue and valid R1/R2 assumptions above to view the Ask vs. Dilution sensitivity grid.</p>';
       heatmapTraceWrap.innerHTML = '';
     } else {
+      const hmColGroup = `<colgroup><col class="vc-hm-col-ask" />${heatmap.dilutions.map(() => '<col class="vc-hm-col-dil" />').join('')}</colgroup>`;
       const hmColsHtml = heatmap.dilutions
         .map((d) => {
           const isCurCol = Math.abs(d - heatmap.currentDilutionPct) < 0.05;
-          return `<th scope="col" class="vc-hm-col-head${isCurCol ? ' is-current-col' : ''}">${escapeHtml(formatPercent(d, 1))}${isCurCol ? ' (yours)' : ''}</th>`;
+          return `<th scope="col" class="vc-hm-col-head${isCurCol ? ' is-current-col' : ''}"><span>${escapeHtml(formatPercent(d, 1))}</span>${isCurCol ? '<span class="vc-hm-yours"> (yours)</span>' : ''}</th>`;
         })
         .join('');
 
       const hmRowsHtml = heatmap.rows
         .map((row) => {
           const askLabel = formatMoney(row.ask, state.unit);
-          const rowHead = `<th scope="row" class="vc-hm-row-head${row.isCurrentAsk ? ' is-current-row' : ''}">${escapeHtml(askLabel)}${row.isCurrentAsk ? '<span class="vc-hm-now">Current ask</span>' : ''}</th>`;
+          const rowHead = `<th scope="row" class="vc-hm-row-head${row.isCurrentAsk ? ' is-current-row' : ''}"><span>${escapeHtml(askLabel)}</span>${row.isCurrentAsk ? '<span class="vc-hm-now">Current</span>' : ''}</th>`;
           const cellsHtml = row.cells
             .map((cell) => {
               const clsParts = ['vc-hm-cell', `vc-hm-cell--${cell.level}`];
               if (cell.isCurrent) clsParts.push('vc-hm-cell--current');
-              const cagrLabel = `${formatPercent(cell.impliedCagrPct, 0)}/yr`;
-              const metaLabel = `${formatMultiple(cell.requiredGrowthMultiple, 1)} · ${formatMoney(cell.postMoney, state.unit)}`;
-              const ariaLabel = `Set R1 ask to ${formatMoney(cell.ask, state.unit)} at ${formatPercent(cell.dilutionPct, 1)} dilution: ${cagrLabel} CAGR, ${cell.level}`;
+              const cagrPctOnly = formatPercent(cell.impliedCagrPct, 0);
+              const growthOnly = formatMultiple(cell.requiredGrowthMultiple, 1);
+              const postMoneyText = formatMoney(cell.postMoney, state.unit);
+              const ariaLabel = `Set R1 ask to ${formatMoney(cell.ask, state.unit)} at ${formatPercent(cell.dilutionPct, 1)} dilution: ${cagrPctOnly}/yr CAGR, ${cell.level}`;
               return `
                 <td>
                   <button
@@ -1591,8 +1624,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                     aria-current="${cell.isCurrent ? 'true' : 'false'}"
                     aria-label="${escapeXml(ariaLabel)}"
                   >
-                    <span class="vc-hm-cagr">${escapeXml(cagrLabel)}</span>
-                    <span class="vc-hm-meta">${escapeXml(metaLabel)}</span>
+                    <span class="vc-hm-cagr">${escapeXml(cagrPctOnly)}<span class="vc-hm-unit">/yr</span></span>
+                    <span class="vc-hm-meta"><span>${escapeXml(growthOnly)}</span><span class="vc-hm-post"> · ${escapeXml(postMoneyText)}</span></span>
                   </button>
                 </td>
               `;
@@ -1604,9 +1637,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
 
       heatmapWrap.innerHTML = `
         <table class="vc-heatmap-table" aria-label="Ask vs. dilution sensitivity grid">
+          ${hmColGroup}
           <thead>
             <tr>
-              <th scope="col" class="vc-hm-corner">R1 Ask \\ Dilution</th>
+              <th scope="col" class="vc-hm-corner">Ask \\ Dil.</th>
               ${hmColsHtml}
             </tr>
           </thead>
