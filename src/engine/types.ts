@@ -1,10 +1,23 @@
 export type CurrencyUnit = 'INR_CR' | 'INR_LAKH' | 'USD_M';
 
 export interface VerdictBands {
-  /** Maximum required revenue growth multiple considered "Reachable" (default: 3.0x — our assumption) */
+  /** Maximum 18-month revenue growth multiple considered "Reachable" (default: 3.0x, ~108%/yr CAGR) */
   reachableMax: number;
-  /** Maximum required revenue growth multiple considered "Stretch" before becoming "Stiff" (default: 5.0x — our assumption) */
+  /** Maximum 18-month revenue growth multiple considered "Stretch" before becoming "Stiff" (default: 5.0x, ~192%/yr CAGR) */
   stretchMax: number;
+}
+
+export interface EffectiveVerdictBands {
+  /** Horizon-adjusted growth multiple ceiling for "Reachable" at constant ~108%/yr CAGR */
+  reachableMax: number;
+  /** Horizon-adjusted growth multiple ceiling for "Stretch" at constant ~192%/yr CAGR */
+  stretchMax: number;
+  /** Annualised CAGR ceiling (%) for "Reachable" */
+  reachableCagrPct: number;
+  /** Annualised CAGR ceiling (%) for "Stretch" */
+  stretchCagrPct: number;
+  /** Horizon months used for normalisation */
+  monthsToNextRound: number;
 }
 
 export interface CheckInput {
@@ -116,6 +129,7 @@ export interface CheckOutput {
   metrics: CheckMetrics;
   sensitivity: SensitivityRow[];
   feasibleAskBand: FeasibleAskBand;
+  effectiveVerdictBands: EffectiveVerdictBands;
 }
 
 export type GoalSeekTarget = 'max_ask' | 'required_revenue' | 'required_dilution';
@@ -147,6 +161,15 @@ export interface AssumptionReference {
   id: string;
   parameter: string;
   defaultValue: string;
-  origin: 'Source Article' | 'Source Article (Comments)' | 'Our Assumption';
+  origin: 'VC Benchmark' | 'Tool Assumption';
   explanation: string;
+}
+
+export interface SectorMultipleBenchmark {
+  id: string;
+  sector: string;
+  p25: number;
+  p50: number;
+  p75: number;
+  note: string;
 }

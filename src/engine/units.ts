@@ -47,7 +47,7 @@ export function formatNumber(
   locale = 'en-IN'
 ): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '—';
+    return '-';
   }
   const rounded = Math.abs(value) < 1e-9 ? 0 : value;
   return rounded.toLocaleString(locale, {
@@ -62,7 +62,7 @@ export function formatMoney(
   maxDecimals?: number
 ): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '—';
+    return '-';
   }
   const meta = UNIT_METADATA[unit];
   const absVal = Math.abs(value);
@@ -80,7 +80,7 @@ export function formatMoney(
 }
 
 /**
- * Formats monthly revenue thoughtfully: e.g. in INR_CR mode, ₹0.75 Cr/mo is also "₹75 Lakh/mo"
+ * Formats monthly revenue concisely: in INR_CR mode, ₹0.75 Cr/mo is also "₹75 Lakh/mo"
  */
 export function formatMonthlyMoney(
   monthlyValueInUnit: number | null | undefined,
@@ -91,7 +91,7 @@ export function formatMonthlyMoney(
     monthlyValueInUnit === undefined ||
     !Number.isFinite(monthlyValueInUnit)
   ) {
-    return '—';
+    return '-';
   }
   if (unit === 'INR_CR') {
     if (monthlyValueInUnit > 0 && monthlyValueInUnit < 1) {
@@ -112,14 +112,14 @@ export function formatMonthlyMoney(
 
 export function formatMultiple(value: number | null | undefined, decimals = 1): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '—';
+    return '-';
   }
   return `${formatNumber(value, decimals, 'en-US')}x`;
 }
 
 export function formatPercent(value: number | null | undefined, decimals = 0): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '—';
+    return '-';
   }
   return `${formatNumber(value, decimals, 'en-US')}%`;
 }

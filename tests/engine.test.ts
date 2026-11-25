@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ASSUMPTION_REFERENCES,
   DEFAULT_VERDICT_BANDS,
   PRESET_SCENARIOS,
+  SECTOR_MULTIPLE_BENCHMARKS,
+  computeFeasibleAskBand,
   convertUnitScale,
   evaluateAsk,
   formatMoney,
@@ -172,10 +175,19 @@ describe('Ask Reality Check Engine — Edge Cases & Prototype Bug Fixes', () => 
     expect(bufferCase.verdict.reasons.some((r) => r.id === 'funding_buffer')).toBe(true);
   });
 
-  it('includes custom user dilution in the sensitivity table sorted alongside 20%, 25%, 33%', () => {
-    const customDil = evaluateAsk(makeInput({ dilutionPct: 15 }));
-    expect(customDil.sensitivity.map((r) => r.dilutionPct)).toEqual([15, 20, 25, 33]);
-    expect(customDil.sensitivity.find((r) => r.dilutionPct === 15)?.isUserSelected).toBe(true);
+  it('includes custom user dilution and a lower step-down row when user dilution is lowest', () => {
+    const dil12 = evaluateAsk(makeInput({ dilutionPct: 12 }));
+    expect(dil12.sensitivity.map((r) => r.dilutionPct)).toEqual([5, 12, 20, 25, 33]);
+    expect(dil12.sensitivity.find((r) => r.dilutionPct === 12)?.isUserSelected).toBe(true);
+
+    const dil15 = evaluateAsk(makeInput({ dilutionPct: 15 }));
+    expect(dil15.sensitivity.map((r) => r.dilutionPct)).toEqual([10, 15, 20, 25, 33]);
+
+    const dil20 = evaluateAsk(makeInput({ dilutionPct: 20 }));
+    expect(dil20.sensitivity.map((r) => r.dilutionPct)).toEqual([15, 20, 25, 33]);
+
+    const dil25 = evaluateAsk(makeInput({ dilutionPct: 25 }));
+    expect(dil25.sensitivity.map((r) => r.dilutionPct)).toEqual([20, 25, 33]);
   });
 });
 
@@ -237,17 +249,48 @@ describe('Ask Reality Check Engine — Goal-Seek Mode & Unit Formatting', () => 
 
 import { generateMarkdownSummary } from '../src/ui/export';
 import { buildQueryString } from '../src/ui/state';
+import { buildXlsxFilename, generateXlsxBytes } from '../src/ui/xlsx';
 
-describe('Share & Export — Markdown Summary and URL State Serialization', () => {
+describe('Share & Export — Markdown Summary, XLSX Workbook & URL State Serialization', () => {
   it('generates a complete Markdown summary including verdict, metrics, and goal-seek', () => {
     const presetB = PRESET_SCENARIOS.find((p) => p.id === 'b')!;
     const md = generateMarkdownSummary(presetB.input, 'INR_CR', 'max_ask', 3.0);
 
-    expect(md).toContain('# Ask Reality Check — Summary (₹ Cr)');
+    expect(md).toContain('# Valuation Check: Summary (₹ Cr)');
     expect(md).toContain('Reachable: 2.8x revenue growth needed in 18 months');
     expect(md).toContain('₹100 Cr');
     expect(md).toContain('₹80 Cr');
     expect(md).toContain('Goal-Seek & Feasible Ask Band');
+    expect(md).not.toContain('—');
+  });
+
+  it('generates a valid PKZIP OOXML .xlsx workbook with live Excel formulas and zero Sajith references', () => {
+    const presetB = PRESET_SCENARIOS.find((p) => p.id === 'b')!;
+    const bytes = generateXlsxBytes(presetB.input, 'INR_CR', 'max_ask', 3.0);
+
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.length).toBeGreaterThan(2000);
+    // PKZIP local file header signature (PK\x03\x04)
+    expect(bytes[0]).toBe(0x50);
+    expect(bytes[1]).toBe(0x4b);
+    expect(bytes[2]).toBe(0x03);
+    expect(bytes[3]).toBe(0x04);
+
+    const rawText = new TextDecoder().decode(bytes);
+    expect(rawText).toContain('[Content_Types].xml');
+    expect(rawText).toContain('xl/workbook.xml');
+    expect(rawText).toContain('xl/styles.xml');
+    expect(rawText).toContain('xl/worksheets/sheet1.xml');
+    expect(rawText).toContain('xl/worksheets/sheet2.xml');
+    expect(rawText).toContain('Rules &amp; Benchmarks');
+    // Live formulas and Example B cached outputs (100 post, 80 pre, 200 next pre, 20 shortfall, CAGR/CMGR)
+    expect(rawText).toContain('<f>B4/(B5/100)</f><v>100</v>');
+    expect(rawText).toContain('<f>B16-B4</f><v>80</v>');
+    expect(rawText).toContain('<f>B16*B9</f><v>200</v>');
+    expect(rawText).toContain('<f>IF(B6&gt;0,(B24^(12/B11))-1,0)</f>');
+    expect(rawText).toContain('<f>MAX(0,B12-B4)</f><v>20</v>');
+    expect(rawText.toLowerCase()).not.toContain('sajith');
+    expect(buildXlsxFilename(presetB.input, 'INR_CR')).toBe('valuation-check-20-cr.xlsx');
   });
 
   it('serializes state into compact URL query parameters', () => {
@@ -266,5 +309,58 @@ describe('Share & Export — Markdown Summary and URL State Serialization', () =
     expect(qs).toContain('priced=0');
     expect(qs).toContain('gst=required_revenue');
     expect(qs).toContain('gsg=3.5');
+  });
+});
+
+describe('CAGR-Normalised Horizon Verdicts, ELI10 Rules & Sector Benchmarks', () => {
+  it('scales verdict ceilings by CAGR when monthsToNextRound differs from 18 months', () => {
+    // Ask = 18.9 Cr on 9 Cr ARR, 20% dilution, 7x multiple -> exact 3.0x growth needed
+    const out18 = evaluateAsk(makeInput({ ask: 18.9, monthsToNextRound: 18 }), 'INR_CR');
+    expect(out18.verdict.level).toBe('reachable');
+
+    // Same 3.0x growth in 12 months = 200%/yr CAGR -> Stiff (> 192%/yr)
+    const out12 = evaluateAsk(makeInput({ ask: 18.9, monthsToNextRound: 12 }), 'INR_CR');
+    expect(out12.metrics.impliedCagrPct.value).toBeCloseTo(200, 3);
+    expect(out12.verdict.level).toBe('stiff');
+
+    // Ask = 25.2 Cr -> 4.0x growth needed: Stretch in 18 mo (152%/yr), Reachable in 24 mo (100%/yr)
+    const stretch18 = evaluateAsk(makeInput({ ask: 25.2, monthsToNextRound: 18 }), 'INR_CR');
+    expect(stretch18.verdict.level).toBe('stretch');
+
+    const reach24 = evaluateAsk(makeInput({ ask: 25.2, monthsToNextRound: 24 }), 'INR_CR');
+    expect(reach24.metrics.impliedCagrPct.value).toBeCloseTo(100, 3);
+    expect(reach24.verdict.level).toBe('reachable');
+
+    // Feasible ask band grows monotonically with longer runway at constant CAGR
+    const band12 = computeFeasibleAskBand(makeInput({ monthsToNextRound: 12 }));
+    const band18 = computeFeasibleAskBand(makeInput({ monthsToNextRound: 18 }));
+    const band24 = computeFeasibleAskBand(makeInput({ monthsToNextRound: 24 }));
+    expect(band12.reachableAsk).toBeLessThan(band18.reachableAsk);
+    expect(band18.reachableAsk).toBeLessThan(band24.reachableAsk);
+  });
+
+  it('provides 5 ELI10 rules and well-ordered P25 < P50 < P75 sector benchmarks with zero em-dashes', () => {
+    expect(ASSUMPTION_REFERENCES).toHaveLength(5);
+    expect(SECTOR_MULTIPLE_BENCHMARKS.length).toBeGreaterThanOrEqual(4);
+    for (const r of ASSUMPTION_REFERENCES) {
+      expect(r.parameter).not.toContain('—');
+      expect(r.defaultValue).not.toContain('—');
+      expect(r.explanation).not.toContain('—');
+    }
+    for (const s of SECTOR_MULTIPLE_BENCHMARKS) {
+      expect(s.p25).toBeLessThan(s.p50);
+      expect(s.p50).toBeLessThan(s.p75);
+      expect(s.note.length).toBeGreaterThan(10);
+      expect(s.sector).not.toContain('—');
+      expect(s.note).not.toContain('—');
+    }
+    for (const p of PRESET_SCENARIOS) {
+      expect(p.description).not.toContain('—');
+      const out = evaluateAsk(p.input, p.unit);
+      expect(out.verdict.headline).not.toContain('—');
+      for (const reason of out.verdict.reasons) {
+        expect(reason.text).not.toContain('—');
+      }
+    }
   });
 });

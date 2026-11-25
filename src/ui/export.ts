@@ -28,28 +28,28 @@ export function generateMarkdownSummary(
   const monthlyRev = input.annualRevenue / 12;
 
   const lines: string[] = [
-    `# Ask Reality Check — Summary (${unitLabel})`,
+    `# Valuation Check: Summary (${unitLabel})`,
     ``,
     `**Verdict:** ${out.verdict.headline}`,
     ``,
     `## 1. Inputs`,
-    `- **Ask (Raise):** ${formatMoney(input.ask, unit)}`,
-    `- **Target Dilution:** ${formatPercent(input.dilutionPct, 1)}`,
+    `- **R1 Ask (Raise):** ${formatMoney(input.ask, unit)}`,
+    `- **R1 Dilution:** ${formatPercent(input.dilutionPct, 1)}`,
     `- **Current Revenue:** ${formatMoney(input.annualRevenue, unit)} ARR (${formatMonthlyMoney(monthlyRev, unit)})`,
-    `- **Required Step-Up:** ${formatMultiple(input.stepUpMultiple, 1)} in ${input.monthsToNextRound} months`,
-    `- **Next-Round Revenue Multiple:** ${formatMultiple(input.nextRoundMultiple, 1)} _(assumption)_`,
+    `- **R2 Valuation Step-Up:** ${formatMultiple(input.stepUpMultiple, 1)} in ${input.monthsToNextRound} months`,
+    `- **R2 Revenue Multiple:** ${formatMultiple(input.nextRoundMultiple, 1)} _(assumption)_`,
   ];
 
   if (input.cashNeeded > 0) {
-    lines.push(`- **Cash Needed (Burn Plan):** ${formatMoney(input.cashNeeded, unit)}`);
+    lines.push(`- **R1 Cash Needed (Burn Plan):** ${formatMoney(input.cashNeeded, unit)}`);
   }
   if (input.priorRaise > 0) {
     lines.push(
-      `- **Previous Raise:** ${formatMoney(input.priorRaise, unit)} (${input.priorRaiseWasPriced ? 'priced round' : 'unpriced'})`
+      `- **R0 Raise:** ${formatMoney(input.priorRaise, unit)} (${input.priorRaiseWasPriced ? 'priced round' : 'unpriced'})`
     );
   }
   if (input.esopTopUpPct > 0) {
-    lines.push(`- **Pre-Money ESOP Pool Top-Up:** ${formatPercent(input.esopTopUpPct, 1)} of post-money`);
+    lines.push(`- **R1 ESOP Pool Top-Up:** ${formatPercent(input.esopTopUpPct, 1)} of post-money`);
   }
 
   lines.push(
@@ -57,22 +57,22 @@ export function generateMarkdownSummary(
     `## 2. What the Ask Signals`,
     `| Metric | Value | Formula / Note |`,
     `| :--- | :--- | :--- |`,
-    `| **Implied Post-Money** | ${out.metrics.impliedPostMoney.formattedValue} | ${out.metrics.impliedPostMoney.subtitle} |`,
-    `| **Implied Pre-Money** | ${out.metrics.impliedPreMoney.formattedValue} | ${out.metrics.impliedPreMoney.subtitle} |`
+    `| **R1 Post-Money** | ${out.metrics.impliedPostMoney.formattedValue} | ${out.metrics.impliedPostMoney.subtitle} |`,
+    `| **R1 Pre-Money** | ${out.metrics.impliedPreMoney.formattedValue} | ${out.metrics.impliedPreMoney.subtitle} |`
   );
 
   if (input.esopTopUpPct > 0) {
     lines.push(
-      `| **Effective Pre-Money (after ESOP)** | ${out.metrics.effectivePreMoneyAfterEsop.formattedValue} | ${out.metrics.effectivePreMoneyAfterEsop.subtitle} |`
+      `| **Effective R1 Pre-Money (after ESOP)** | ${out.metrics.effectivePreMoneyAfterEsop.formattedValue} | ${out.metrics.effectivePreMoneyAfterEsop.subtitle} |`
     );
   }
 
   lines.push(
-    `| **Implied Revenue Multiple** | ${out.metrics.impliedPostRevenueMultiple.formattedValue} | ${out.metrics.impliedPostRevenueMultiple.subtitle} |`,
-    `| **Next-Round Pre-Money** | ${out.metrics.nextRoundPreMoney.formattedValue} | ${out.metrics.nextRoundPreMoney.subtitle} |`,
-    `| **Revenue Needed at Next Round** | ${out.metrics.requiredNextAnnualRevenue.formattedValue} | ${out.metrics.requiredNextAnnualRevenue.subtitle} |`,
+    `| **R1 Revenue Multiple** | ${out.metrics.impliedPostRevenueMultiple.formattedValue} | ${out.metrics.impliedPostRevenueMultiple.subtitle} |`,
+    `| **R2 Pre-Money** | ${out.metrics.nextRoundPreMoney.formattedValue} | ${out.metrics.nextRoundPreMoney.subtitle} |`,
+    `| **Required R2 ARR** | ${out.metrics.requiredNextAnnualRevenue.formattedValue} | ${out.metrics.requiredNextAnnualRevenue.subtitle} |`,
     `| **Required Revenue Growth** | ${out.metrics.requiredGrowthMultiple.formattedValue} | ${out.metrics.requiredGrowthMultiple.subtitle} |`,
-    `| **Milestone Funding Gap** | ${out.metrics.fundingGap.formattedValue} | ${out.metrics.fundingGap.subtitle} |`
+    `| **Burn Shortfall** | ${out.metrics.fundingGap.formattedValue} | ${out.metrics.fundingGap.subtitle} |`
   );
 
   lines.push(``, `## 3. Diagnostic Notes`);
@@ -84,12 +84,12 @@ export function generateMarkdownSummary(
     lines.push(
       ``,
       `## 4. Goal-Seek & Feasible Ask Band`,
-      `- **Reachable Ask Ceiling (≤${formatMultiple(input.verdictBands.reachableMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit)}`,
-      `- **Stretch Ask Ceiling (≤${formatMultiple(input.verdictBands.stretchMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit)}`
+      `- **Reachable Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.reachableMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit)}`,
+      `- **Stretch Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.stretchMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit)}`
     );
     if (out.feasibleAskBand.priorRaiseBand) {
       lines.push(
-        `- **3–4x Priced Prior Raise Band:** ${formatMoney(out.feasibleAskBand.priorRaiseBand[0], unit)} – ${formatMoney(out.feasibleAskBand.priorRaiseBand[1], unit)}`
+        `- **3x to 4x Priced R0 Band:** ${formatMoney(out.feasibleAskBand.priorRaiseBand[0], unit)} to ${formatMoney(out.feasibleAskBand.priorRaiseBand[1], unit)}`
       );
     }
     lines.push(`- **Goal-Seek (${seek.target.replace('_', ' ')}):** ${seek.summary}`);
@@ -99,18 +99,18 @@ export function generateMarkdownSummary(
     lines.push(
       ``,
       `## 5. Dilution Sensitivity`,
-      `| Dilution | Post-Money | Pre-Money | Pre / Post Multiple | Next Pre-Money | Growth Needed |`,
+      `| Dilution | Post-Money | Pre-Money | Pre / Post Multiple | R2 Pre-Money | Growth Needed |`,
       `| :--- | ---: | ---: | ---: | ---: | ---: |`
     );
     out.sensitivity.forEach((row) => {
       const multStr =
         row.impliedPreMultiple !== null && row.impliedPostMultiple !== null
           ? `${formatMultiple(row.impliedPreMultiple, 1)} / ${formatMultiple(row.impliedPostMultiple, 1)}`
-          : '—';
+          : '-';
       const gxStr =
         row.requiredGrowthMultiple !== null
           ? formatMultiple(row.requiredGrowthMultiple, 1)
-          : '—';
+          : '-';
       lines.push(
         `| ${formatPercent(row.dilutionPct, 1)}${row.isUserSelected ? ' *(yours)*' : ''} | ${formatMoney(row.postMoney, unit)} | ${formatMoney(row.preMoney, unit)} | ${multStr} | ${formatMoney(row.nextPreMoney, unit)} | ${gxStr} |`
       );
@@ -120,7 +120,7 @@ export function generateMarkdownSummary(
   lines.push(
     ``,
     `---`,
-    `_Generated by Ask Reality Check (client-side thinking aid based on Sajith Pai's note; not investment advice)._`
+    `_Generated by Valuation Check (100% client-side thinking aid; not financial or investment advice)._`
   );
 
   return lines.join('\n');
