@@ -1,10 +1,13 @@
 import {
   ASSUMPTION_REFERENCES,
+  DEFAULT_FX_INR_PER_USD,
+  LABELS,
   SECTOR_MULTIPLE_BENCHMARKS,
   UNIT_METADATA,
   evaluateAsk,
   formatMultiple,
   formatPercent,
+  fromCr,
   solveGoalSeek,
   type CheckInput,
   type CurrencyUnit,
@@ -284,10 +287,18 @@ const STYLES_XML =
   '</cellXfs>' +
   '</styleSheet>';
 
-export function buildXlsxFilename(input: CheckInput, unit: CurrencyUnit): string {
+export function buildXlsxFilename(
+  input: CheckInput,
+  unit: CurrencyUnit,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
   const unitSlug =
     unit === 'INR_CR' ? 'cr' : unit === 'INR_LAKH' ? 'lakh' : 'usd-m';
-  const rawAsk = Number.isFinite(input.ask) && input.ask > 0 ? String(Number(input.ask.toFixed(2))) : 'scenario';
+  const displayedAsk = fromCr(input.ask, unit, fxInrPerUsd);
+  const rawAsk =
+    Number.isFinite(displayedAsk) && displayedAsk > 0
+      ? String(Number(displayedAsk.toFixed(2)))
+      : 'scenario';
   const askSlug = rawAsk.replace(/[^a-zA-Z0-9._-]+/g, '-');
   return `valuation-check-${askSlug}-${unitSlug}.xlsx`;
 }
@@ -296,19 +307,35 @@ export function generateXlsxBytes(
   input: CheckInput,
   unit: CurrencyUnit,
   goalSeekTarget: GoalSeekTarget = 'max_ask',
-  goalSeekGrowth?: number
+  goalSeekGrowth?: number,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
 ): Uint8Array {
-  const out = evaluateAsk(input, unit);
+  const out = evaluateAsk(input, unit, fxInrPerUsd);
   const effBands = out.effectiveVerdictBands;
   const seek = solveGoalSeek(
     input,
     goalSeekTarget,
     goalSeekGrowth ?? effBands.reachableMax,
-    unit
+    unit,
+    fxInrPerUsd
   );
+  const d = (crVal: number | null | undefined): number =>
+    crVal !== null && crVal !== undefined && Number.isFinite(crVal)
+      ? fromCr(crVal, unit, fxInrPerUsd)
+      : 0;
   const unitLabel = UNIT_METADATA[unit].shortUnit;
+  const unitHeaderNote =
+    unit === 'USD_M'
+      ? `Monetary unit: ${unitLabel} (FX: ₹${fxInrPerUsd}/USD)`
+      : `Monetary unit: ${unitLabel}`;
   const reachBase = input.verdictBands.reachableMax;
   const stretchBase = input.verdictBands.stretchMax;
+  const effectiveMonthlyBurnCr =
+    (input.monthlyBurn ?? 0) > 0
+      ? (input.monthlyBurn ?? 0)
+      : input.cashNeeded > 0
+        ? input.cashNeeded / Math.max(1, input.monthsToNextRound)
+        : 0;
 
   const cagrRatio =
     out.metrics.impliedCagrPct.value !== null ? out.metrics.impliedCagrPct.value / 100 : 0;
@@ -320,7 +347,7 @@ export function generateXlsxBytes(
       rowNum: 1,
       cells: [
         { col: 1, spec: { kind: 'str', value: 'Valuation Check: Financial Summary', style: 2 } },
-        { col: 2, spec: { kind: 'str', value: `Monetary unit: ${unitLabel}`, style: 10 } },
+        { col: 2, spec: { kind: 'str', value: unitHeaderNote, style: 10 } },
       ],
     },
     {
@@ -335,7 +362,7 @@ export function generateXlsxBytes(
       rowNum: 4,
       cells: [
         { col: 1, spec: { kind: 'str', value: `Ask (intended raise, ${unitLabel})`, style: 1 } },
-        { col: 2, spec: { kind: 'num', value: input.ask, style: 5 } },
+        { col: 2, spec: { kind: 'num', value: d(input.ask), style: 5 } },
         { col: 3, spec: { kind: 'str', value: `Monetary amount in ${unitLabel}`, style: 0 } },
       ],
     },
@@ -344,14 +371,14 @@ export function generateXlsxBytes(
       cells: [
         { col: 1, spec: { kind: 'str', value: 'Target dilution (%)', style: 1 } },
         { col: 2, spec: { kind: 'num', value: input.dilutionPct, style: 6 } },
-        { col: 3, spec: { kind: 'str', value: 'Typical early-stage band: 20%–25%', style: 0 } },
+        { col: 3, spec: { kind: 'str', value: 'Typical early-stage band: 20% to 25%', style: 0 } },
       ],
     },
     {
       rowNum: 6,
       cells: [
         { col: 1, spec: { kind: 'str', value: `Current annualised revenue (ARR, ${unitLabel})`, style: 1 } },
-        { col: 2, spec: { kind: 'num', value: input.annualRevenue, style: 5 } },
+        { col: 2, spec: { kind: 'num', value: d(input.annualRevenue), style: 5 } },
         { col: 3, spec: { kind: 'str', value: '12 × monthly revenue', style: 0 } },
       ],
     },
@@ -359,7 +386,7 @@ export function generateXlsxBytes(
       rowNum: 7,
       cells: [
         { col: 1, spec: { kind: 'str', value: `Current monthly revenue (MRR, ${unitLabel}/mo)`, style: 1 } },
-        { col: 2, spec: { kind: 'formula', formula: 'B6/12', value: input.annualRevenue / 12, style: 5 } },
+        { col: 2, spec: { kind: 'formula', formula: 'B6/12', value: d(input.annualRevenue) / 12, style: 5 } },
         { col: 3, spec: { kind: 'str', value: 'Synced ARR ÷ 12', style: 0 } },
       ],
     },
@@ -367,12 +394,12 @@ export function generateXlsxBytes(
       rowNum: 8,
       cells: [
         { col: 1, spec: { kind: 'str', value: `Previous raise (${unitLabel})`, style: 1 } },
-        { col: 2, spec: { kind: 'num', value: input.priorRaise, style: 5 } },
+        { col: 2, spec: { kind: 'num', value: d(input.priorRaise), style: 5 } },
         {
           col: 3,
           spec: {
             kind: 'str',
-            value: input.priorRaiseWasPriced ? 'Priced equity round (3–4x rule applies)' : 'Unpriced / grant / convertible',
+            value: input.priorRaiseWasPriced ? 'Priced equity round (3 to 4x rule applies)' : 'Unpriced / grant / convertible',
             style: 0,
           },
         },
@@ -399,23 +426,23 @@ export function generateXlsxBytes(
       cells: [
         { col: 1, spec: { kind: 'str', value: 'Months to next round', style: 1 } },
         { col: 2, spec: { kind: 'num', value: input.monthsToNextRound, style: 8 } },
-        { col: 3, spec: { kind: 'str', value: 'Standard seed horizon: 15–18 months', style: 0 } },
+        { col: 3, spec: { kind: 'str', value: 'Standard seed horizon: 15 to 18 months', style: 0 } },
       ],
     },
     {
       rowNum: 12,
       cells: [
-        { col: 1, spec: { kind: 'str', value: `Cash needed from burn plan (${unitLabel})`, style: 1 } },
-        { col: 2, spec: { kind: 'num', value: input.cashNeeded, style: 5 } },
-        { col: 3, spec: { kind: 'str', value: '0 if unset', style: 0 } },
+        { col: 1, spec: { kind: 'str', value: `Monthly net burn (${unitLabel}/mo)`, style: 1 } },
+        { col: 2, spec: { kind: 'num', value: d(effectiveMonthlyBurnCr), style: 5 } },
+        { col: 3, spec: { kind: 'str', value: 'Optional; total cash need = Monthly burn × Months (0 if unset)', style: 0 } },
       ],
     },
     {
       rowNum: 13,
       cells: [
-        { col: 1, spec: { kind: 'str', value: 'Pre-money ESOP pool top-up (%)', style: 1 } },
+        { col: 1, spec: { kind: 'str', value: 'ESOP pool created this round (%)', style: 1 } },
         { col: 2, spec: { kind: 'num', value: input.esopTopUpPct, style: 6 } },
-        { col: 3, spec: { kind: 'str', value: '% of post-money deducted from pre-money', style: 0 } },
+        { col: 3, spec: { kind: 'str', value: '% of post-money carved out of pre-money', style: 0 } },
       ],
     },
     {
@@ -435,7 +462,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: 'B4/(B5/100)',
-            value: out.metrics.impliedPostMoney.value ?? 0,
+            value: d(out.metrics.impliedPostMoney.value),
             style: 9,
           },
         },
@@ -451,7 +478,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: 'B16-B4',
-            value: out.metrics.impliedPreMoney.value ?? 0,
+            value: d(out.metrics.impliedPreMoney.value),
             style: 5,
           },
         },
@@ -467,7 +494,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: 'B17-(B16*B13/100)',
-            value: out.metrics.effectivePreMoneyAfterEsop.value ?? 0,
+            value: d(out.metrics.effectivePreMoneyAfterEsop.value),
             style: 5,
           },
         },
@@ -515,7 +542,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: 'B16*B9',
-            value: out.metrics.nextRoundPreMoney.value ?? 0,
+            value: d(out.metrics.nextRoundPreMoney.value),
             style: 9,
           },
         },
@@ -531,7 +558,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: 'B21/B10',
-            value: out.metrics.requiredNextAnnualRevenue.value ?? 0,
+            value: d(out.metrics.requiredNextAnnualRevenue.value),
             style: 9,
           },
         },
@@ -547,7 +574,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: 'B22/12',
-            value: out.metrics.requiredNextMonthlyRevenue.value ?? 0,
+            value: d(out.metrics.requiredNextMonthlyRevenue.value),
             style: 5,
           },
         },
@@ -610,18 +637,18 @@ export function generateXlsxBytes(
           col: 2,
           spec: {
             kind: 'formula',
-            formula: 'MAX(0,B12-B4)',
-            value: out.metrics.fundingGap.value ?? 0,
+            formula: 'MAX(0,(B12*B11)-B4)',
+            value: d(out.metrics.fundingGap.value),
             style: 5,
           },
         },
-        { col: 3, spec: { kind: 'str', value: 'MAX(0, Cash Needed − Ask)', style: 0 } },
+        { col: 3, spec: { kind: 'str', value: 'MAX(0, (Monthly Burn × Months) − Ask)', style: 0 } },
       ],
     },
     {
       rowNum: 29,
       cells: [
-        { col: 1, spec: { kind: 'str', value: '3. Verdict & Goal-Seek', style: 3 } },
+        { col: 1, spec: { kind: 'str', value: `3. ${LABELS.pricingCheckTitle} & Goal-Seek`, style: 3 } },
         { col: 2, spec: { kind: 'str', value: 'Result', style: 3 } },
         { col: 3, spec: { kind: 'str', value: 'Notes', style: 3 } },
       ],
@@ -629,13 +656,13 @@ export function generateXlsxBytes(
     {
       rowNum: 30,
       cells: [
-        { col: 1, spec: { kind: 'str', value: 'Verdict', style: 1 } },
+        { col: 1, spec: { kind: 'str', value: LABELS.pricingCheckTitle, style: 1 } },
         { col: 2, spec: { kind: 'str', value: out.verdict.headline, style: 1 } },
         {
           col: 3,
           spec: {
             kind: 'str',
-            value: `Reachable ≤ ${formatPercent(effBands.reachableCagrPct, 0)}/yr / Stretch ≤ ${formatPercent(effBands.stretchCagrPct, 0)}/yr`,
+            value: `${LABELS.bands.reachable} ≤ ${formatPercent(effBands.reachableCagrPct, 0)}/yr / ${LABELS.bands.stretch} ≤ ${formatPercent(effBands.stretchCagrPct, 0)}/yr`,
             style: 0,
           },
         },
@@ -648,7 +675,7 @@ export function generateXlsxBytes(
           col: 1,
           spec: {
             kind: 'str',
-            value: `Max reachable ask (≤${formatMultiple(effBands.reachableMax, 1)}, ${unitLabel})`,
+            value: `Max conservative ask (≤${formatMultiple(effBands.reachableMax, 1)}, ${unitLabel})`,
             style: 1,
           },
         },
@@ -657,7 +684,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: `IF(B6>0,(B6*(${reachBase}^(B11/18))*B10/B9)*(B5/100),0)`,
-            value: out.feasibleAskBand.reachableAsk,
+            value: d(out.feasibleAskBand.reachableAsk),
             style: 5,
           },
         },
@@ -680,7 +707,7 @@ export function generateXlsxBytes(
           spec: {
             kind: 'formula',
             formula: `IF(B6>0,(B6*(${stretchBase}^(B11/18))*B10/B9)*(B5/100),0)`,
-            value: out.feasibleAskBand.stretchAsk,
+            value: d(out.feasibleAskBand.stretchAsk),
             style: 5,
           },
         },
@@ -742,11 +769,11 @@ export function generateXlsxBytes(
         { col: 1, spec: { kind: 'num', value: row.dilutionPct, style: 6 } },
         {
           col: 2,
-          spec: { kind: 'formula', formula: `$B$4/(A${rIdx}/100)`, value: row.postMoney, style: 5 },
+          spec: { kind: 'formula', formula: `$B$4/(A${rIdx}/100)`, value: d(row.postMoney), style: 5 },
         },
         {
           col: 3,
-          spec: { kind: 'formula', formula: `B${rIdx}-$B$4`, value: row.preMoney, style: 5 },
+          spec: { kind: 'formula', formula: `B${rIdx}-$B$4`, value: d(row.preMoney), style: 5 },
         },
         {
           col: 4,
@@ -768,7 +795,7 @@ export function generateXlsxBytes(
         },
         {
           col: 6,
-          spec: { kind: 'formula', formula: `B${rIdx}*$B$9`, value: row.nextPreMoney, style: 5 },
+          spec: { kind: 'formula', formula: `B${rIdx}*$B$9`, value: d(row.nextPreMoney), style: 5 },
         },
         {
           col: 7,
@@ -806,11 +833,17 @@ export function generateXlsxBytes(
       ],
     },
     {
+      rowNum: 2,
+      cells: [
+        { col: 1, spec: { kind: 'str', value: LABELS.benchmarkSourceLine, style: 10 } },
+      ],
+    },
+    {
       rowNum: 3,
       cells: [
         { col: 1, spec: { kind: 'str', value: 'Rule of Thumb', style: 3 } },
         { col: 2, spec: { kind: 'str', value: 'Benchmark', style: 3 } },
-        { col: 3, spec: { kind: 'str', value: 'Origin', style: 3 } },
+        { col: 3, spec: { kind: 'str', value: 'Tag', style: 3 } },
         { col: 4, spec: { kind: 'str', value: 'Plain-English Explanation', style: 3 } },
       ],
     },
@@ -869,15 +902,16 @@ export function downloadXlsxReport(
   input: CheckInput,
   unit: CurrencyUnit,
   goalSeekTarget: GoalSeekTarget = 'max_ask',
-  goalSeekGrowth?: number
+  goalSeekGrowth?: number,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
 ): string {
-  const bytes = generateXlsxBytes(input, unit, goalSeekTarget, goalSeekGrowth);
+  const bytes = generateXlsxBytes(input, unit, goalSeekTarget, goalSeekGrowth, fxInrPerUsd);
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   const blob = new Blob([copy], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  const filename = buildXlsxFilename(input, unit);
+  const filename = buildXlsxFilename(input, unit, fxInrPerUsd);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

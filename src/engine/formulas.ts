@@ -1,3 +1,4 @@
+import { LABELS } from './labels';
 import type {
   AskDilutionHeatmap,
   AskDilutionHeatmapCell,
@@ -19,6 +20,7 @@ import type {
   VerdictReason,
 } from './types';
 import {
+  DEFAULT_FX_INR_PER_USD,
   formatMoney,
   formatMonthlyMoney,
   formatMultiple,
@@ -102,7 +104,17 @@ export function validateInput(input: CheckInput): ValidationResult {
   if (!Number.isFinite(input.cashNeeded) || input.cashNeeded < 0) {
     errors.push({
       field: 'cashNeeded',
-      message: 'R1 cash needed cannot be negative.',
+      message: 'Cash needed cannot be negative.',
+    });
+  }
+
+  if (
+    input.monthlyBurn !== undefined &&
+    (!Number.isFinite(input.monthlyBurn) || input.monthlyBurn < 0)
+  ) {
+    errors.push({
+      field: 'monthlyBurn',
+      message: 'Monthly net burn cannot be negative.',
     });
   }
 
@@ -140,7 +152,7 @@ export function validateInput(input: CheckInput): ValidationResult {
   ) {
     errors.push({
       field: 'verdictBands',
-      message: 'Verdict bands must have 0 < Reachable ceiling < Stretch ceiling.',
+      message: 'Pricing bands must have 0 < Conservative ceiling < Stretch ceiling.',
     });
   }
 
@@ -267,8 +279,14 @@ export function computeFeasibleAskBand(input: CheckInput): FeasibleAskBand {
 
 export function evaluateAsk(
   input: CheckInput,
-  unit: CurrencyUnit = 'INR_CR'
+  unit: CurrencyUnit = 'INR_CR',
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
 ): CheckOutput {
+  const fmtM = (v: number | null | undefined, maxDecimals?: number) =>
+    formatMoney(v, unit, maxDecimals, fxInrPerUsd);
+  const fmtMM = (v: number | null | undefined) =>
+    formatMonthlyMoney(v, unit, fxInrPerUsd);
+
   const validation = validateInput(input);
   const effBands = computeEffectiveVerdictBands(input);
   const feasibleAskBand = computeFeasibleAskBand(input);
@@ -279,7 +297,7 @@ export function evaluateAsk(
       label: string,
       formula: string,
       isAssumption = false,
-      assumptionOrigin = 'VC Benchmark'
+      assumptionOrigin: string = LABELS.ruleOfThumbTag
     ) => ({
       id,
       label,
@@ -298,9 +316,7 @@ export function evaluateAsk(
       effectivePreMoneyAfterEsop: emptyMetric(
         'effectivePreMoneyAfterEsop',
         'Effective R1 pre-money (after ESOP)',
-        'R1 Pre-Money − (R1 Post-Money × ESOP % ÷ 100)',
-        false,
-        'VC Benchmark (ESOP dilution)'
+        'R1 Pre-Money − (R1 Post-Money × ESOP % ÷ 100)'
       ),
       impliedPostRevenueMultiple: emptyMetric(
         'impliedPostRevenueMultiple',
@@ -320,7 +336,8 @@ export function evaluateAsk(
       requiredNextAnnualRevenue: emptyMetric(
         'requiredNextAnnualRevenue',
         'Required R2 ARR',
-        'R2 Pre-Money ÷ R2 Multiple'
+        'R2 Pre-Money ÷ R2 Multiple',
+        true
       ),
       requiredNextMonthlyRevenue: emptyMetric(
         'requiredNextMonthlyRevenue',
@@ -336,20 +353,18 @@ export function evaluateAsk(
         'impliedCagrPct',
         'Implied annual CAGR',
         '(Growth Needed ^ (12 ÷ Months)) − 1',
-        true,
-        'Tool Assumption'
+        true
       ),
       impliedCmgrPct: emptyMetric(
         'impliedCmgrPct',
         'Implied monthly CMGR',
         '(Growth Needed ^ (1 ÷ Months)) − 1',
-        true,
-        'Tool Assumption'
+        true
       ),
       fundingGap: emptyMetric(
         'fundingGap',
         'Burn shortfall',
-        'max(0, R1 Cash Needed − R1 Ask)'
+        'max(0, (Monthly Burn × Months) − R1 Ask)'
       ),
       askToPriorRaiseMultiple: emptyMetric(
         'askToPriorRaiseMultiple',
@@ -364,7 +379,7 @@ export function evaluateAsk(
       validation,
       verdict: {
         level: 'invalid',
-        headline: 'Check input values to run the calculation',
+        headline: 'Check input values to run the pricing check',
         summary: validation.errors.map((e) => e.message).join(' '),
         reasons: validation.errors.map((e, idx) => ({
           id: `err_${idx}`,
@@ -394,6 +409,9 @@ export function evaluateAsk(
     esopTopUpPct,
   } = input;
 
+  const monthlyBurn = input.monthlyBurn ?? 0;
+  const effectiveCashNeeded = monthlyBurn > 0 ? monthlyBurn * monthsToNextRound : cashNeeded;
+
   const core = computeRowForDilution(
     ask,
     dilutionPct,
@@ -415,7 +433,7 @@ export function evaluateAsk(
       ? Math.pow(core.requiredGrowthMultiple, 1 / monthsToNextRound) - 1
       : null;
 
-  const rawGap = cashNeeded > 0 ? cashNeeded - ask : null;
+  const rawGap = effectiveCashNeeded > 0 ? effectiveCashNeeded - ask : null;
   const fundingGapVal = rawGap !== null ? Math.max(0, rawGap) : null;
   const askToPrior = priorRaise > 0 ? ask / priorRaise : null;
 
@@ -424,37 +442,37 @@ export function evaluateAsk(
       id: 'impliedPostMoney',
       label: 'R1 post-money',
       value: core.postMoney,
-      formattedValue: formatMoney(core.postMoney, unit),
+      formattedValue: fmtM(core.postMoney),
       subtitle: `R1 ask ÷ ${formatPercent(dilutionPct, 1)} dilution`,
       formula: 'R1 Post-Money = R1 Ask ÷ (R1 Dilution % ÷ 100)',
-      calculation: `${formatMoney(ask, unit)} ÷ ${(dilutionPct / 100).toFixed(4).replace(/\.?0+$/, '')} = ${formatMoney(core.postMoney, unit)}`,
+      calculation: `${fmtM(ask)} ÷ ${(dilutionPct / 100).toFixed(4).replace(/\.?0+$/, '')} = ${fmtM(core.postMoney)}`,
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     impliedPreMoney: {
       id: 'impliedPreMoney',
       label: 'R1 pre-money',
       value: core.preMoney,
-      formattedValue: formatMoney(core.preMoney, unit),
+      formattedValue: fmtM(core.preMoney),
       subtitle: 'R1 post-money − R1 ask',
       formula: 'R1 Pre-Money = R1 Post-Money − R1 Ask',
-      calculation: `${formatMoney(core.postMoney, unit)} − ${formatMoney(ask, unit)} = ${formatMoney(core.preMoney, unit)}`,
+      calculation: `${fmtM(core.postMoney)} − ${fmtM(ask)} = ${fmtM(core.preMoney)}`,
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     effectivePreMoneyAfterEsop: {
       id: 'effectivePreMoneyAfterEsop',
       label: 'Effective R1 pre-money (after ESOP)',
       value: effectivePreMoney,
-      formattedValue: formatMoney(effectivePreMoney, unit),
+      formattedValue: fmtM(effectivePreMoney),
       subtitle:
         esopTopUpPct > 0
-          ? `after ${formatPercent(esopTopUpPct, 1)} ESOP pool (${formatMoney(esopPoolValue, unit)})`
-          : 'no pre-money ESOP top-up set',
+          ? `after ${formatPercent(esopTopUpPct, 1)} ESOP pool (${fmtM(esopPoolValue)})`
+          : 'no ESOP pool created this round',
       formula: 'Effective R1 Pre-Money = R1 Pre-Money − (R1 Post-Money × ESOP % ÷ 100)',
-      calculation: `${formatMoney(core.preMoney, unit)} − (${formatMoney(core.postMoney, unit)} × ${(esopTopUpPct / 100).toFixed(4).replace(/\.?0+$/, '')}) = ${formatMoney(effectivePreMoney, unit)}`,
+      calculation: `${fmtM(core.preMoney)} − (${fmtM(core.postMoney)} × ${(esopTopUpPct / 100).toFixed(4).replace(/\.?0+$/, '')}) = ${fmtM(effectivePreMoney)}`,
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark (ESOP dilution)',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     impliedPostRevenueMultiple: {
       id: 'impliedPostRevenueMultiple',
@@ -463,7 +481,7 @@ export function evaluateAsk(
       formattedValue:
         core.impliedPostMultiple !== null
           ? `${formatMultiple(core.impliedPostMultiple, 1)} post`
-          : 'Enter revenue',
+          : 'Pre-revenue',
       subtitle:
         core.impliedPreMultiple !== null
           ? `${formatMultiple(core.impliedPreMultiple, 1)} pre-money ÷ ARR`
@@ -472,10 +490,10 @@ export function evaluateAsk(
         'R1 Post Multiple = R1 Post-Money ÷ ARR | R1 Pre Multiple = R1 Pre-Money ÷ ARR',
       calculation:
         core.impliedPostMultiple !== null && core.impliedPreMultiple !== null
-          ? `Post: ${formatMoney(core.postMoney, unit)} ÷ ${formatMoney(annualRevenue, unit)} = ${formatMultiple(core.impliedPostMultiple, 2)} | Pre: ${formatMoney(core.preMoney, unit)} ÷ ${formatMoney(annualRevenue, unit)} = ${formatMultiple(core.impliedPreMultiple, 2)}`
-          : 'Requires current annual revenue > 0',
+          ? `Post: ${fmtM(core.postMoney)} ÷ ${fmtM(annualRevenue)} = ${formatMultiple(core.impliedPostMultiple, 2)} | Pre: ${fmtM(core.preMoney)} ÷ ${fmtM(annualRevenue)} = ${formatMultiple(core.impliedPreMultiple, 2)}`
+          : 'Pre-revenue (ARR = 0)',
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     impliedPreRevenueMultiple: {
       id: 'impliedPreRevenueMultiple',
@@ -484,51 +502,48 @@ export function evaluateAsk(
       formattedValue:
         core.impliedPreMultiple !== null
           ? formatMultiple(core.impliedPreMultiple, 1)
-          : 'Enter revenue',
+          : 'Pre-revenue',
       subtitle: 'R1 pre-money ÷ current ARR',
       formula: 'R1 Pre-Money Multiple = R1 Pre-Money ÷ Current ARR',
       calculation:
         core.impliedPreMultiple !== null
-          ? `${formatMoney(core.preMoney, unit)} ÷ ${formatMoney(annualRevenue, unit)} = ${formatMultiple(core.impliedPreMultiple, 2)}`
-          : 'Requires current annual revenue > 0',
+          ? `${fmtM(core.preMoney)} ÷ ${fmtM(annualRevenue)} = ${formatMultiple(core.impliedPreMultiple, 2)}`
+          : 'Pre-revenue (ARR = 0)',
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     nextRoundPreMoney: {
       id: 'nextRoundPreMoney',
       label: 'R2 pre-money',
       value: core.nextPreMoney,
-      formattedValue: formatMoney(core.nextPreMoney, unit),
+      formattedValue: fmtM(core.nextPreMoney),
       subtitle: `${formatMultiple(stepUpMultiple, 1)} R1 post-money`,
       formula: 'R2 Pre-Money = R1 Post-Money × R2 Step-Up',
-      calculation: `${formatMoney(core.postMoney, unit)} × ${formatMultiple(stepUpMultiple, 2)} = ${formatMoney(core.nextPreMoney, unit)}`,
+      calculation: `${fmtM(core.postMoney)} × ${formatMultiple(stepUpMultiple, 2)} = ${fmtM(core.nextPreMoney)}`,
       isAssumption: stepUpMultiple !== 2,
-      assumptionOrigin:
-        stepUpMultiple === 2
-          ? 'VC Benchmark (2x minimum)'
-          : 'User Override (benchmark is 2x)',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     requiredNextAnnualRevenue: {
       id: 'requiredNextAnnualRevenue',
       label: 'Required R2 ARR',
       value: core.requiredAnnualRevenue,
-      formattedValue: formatMoney(core.requiredAnnualRevenue, unit),
-      subtitle: `${formatMonthlyMoney(core.requiredMonthlyRevenue, unit)} at ${formatMultiple(nextRoundMultiple, 1)} R2`,
+      formattedValue: fmtM(core.requiredAnnualRevenue),
+      subtitle: `${fmtMM(core.requiredMonthlyRevenue)} at ${formatMultiple(nextRoundMultiple, 1)} R2`,
       formula: 'Required R2 ARR = R2 Pre-Money ÷ R2 Multiple',
-      calculation: `${formatMoney(core.nextPreMoney, unit)} ÷ ${formatMultiple(nextRoundMultiple, 2)} = ${formatMoney(core.requiredAnnualRevenue, unit)} (${formatMonthlyMoney(core.requiredMonthlyRevenue, unit)})`,
+      calculation: `${fmtM(core.nextPreMoney)} ÷ ${formatMultiple(nextRoundMultiple, 2)} = ${fmtM(core.requiredAnnualRevenue)} (${fmtMM(core.requiredMonthlyRevenue)})`,
       isAssumption: true,
-      assumptionOrigin: 'Tool Assumption / Sector Comparable Multiple',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     requiredNextMonthlyRevenue: {
       id: 'requiredNextMonthlyRevenue',
       label: 'Required R2 monthly revenue',
       value: core.requiredMonthlyRevenue,
-      formattedValue: formatMonthlyMoney(core.requiredMonthlyRevenue, unit),
+      formattedValue: fmtMM(core.requiredMonthlyRevenue),
       subtitle: 'required R2 ARR ÷ 12',
       formula: 'Required R2 Monthly Revenue = Required R2 ARR ÷ 12',
-      calculation: `${formatMoney(core.requiredAnnualRevenue, unit)} ÷ 12 = ${formatMonthlyMoney(core.requiredMonthlyRevenue, unit)}`,
+      calculation: `${fmtM(core.requiredAnnualRevenue)} ÷ 12 = ${fmtMM(core.requiredMonthlyRevenue)}`,
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     requiredGrowthMultiple: {
       id: 'requiredGrowthMultiple',
@@ -537,18 +552,18 @@ export function evaluateAsk(
       formattedValue:
         core.requiredGrowthMultiple !== null
           ? formatMultiple(core.requiredGrowthMultiple, 1)
-          : 'Enter revenue',
+          : 'Pre-revenue',
       subtitle:
         cagr !== null
           ? `${formatPercent(cagr * 100, 0)}/yr (${formatPercent((cmgr ?? 0) * 100, 1)}/mo) over ${formatNumber(monthsToNextRound, 0)} mo`
-          : 'add current revenue to compute growth',
+          : 'requires positive ARR',
       formula: 'Growth Multiple = Required R2 ARR ÷ Current ARR',
       calculation:
         core.requiredGrowthMultiple !== null
-          ? `${formatMoney(core.requiredAnnualRevenue, unit)} ÷ ${formatMoney(annualRevenue, unit)} = ${formatMultiple(core.requiredGrowthMultiple, 2)}`
-          : 'Requires current annual revenue > 0',
+          ? `${fmtM(core.requiredAnnualRevenue)} ÷ ${fmtM(annualRevenue)} = ${formatMultiple(core.requiredGrowthMultiple, 2)}`
+          : 'Pre-revenue (ARR = 0)',
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     impliedCagrPct: {
       id: 'impliedCagrPct',
@@ -560,9 +575,9 @@ export function evaluateAsk(
       calculation:
         cagr !== null && core.requiredGrowthMultiple !== null
           ? `(${core.requiredGrowthMultiple.toFixed(2)} ^ (12 ÷ ${monthsToNextRound})) − 1 = ${formatPercent(cagr * 100, 1)}`
-          : 'Requires current annual revenue > 0',
+          : 'Pre-revenue (ARR = 0)',
       isAssumption: true,
-      assumptionOrigin: 'Tool Assumption (compound annualisation)',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     impliedCmgrPct: {
       id: 'impliedCmgrPct',
@@ -574,33 +589,38 @@ export function evaluateAsk(
       calculation:
         cmgr !== null && core.requiredGrowthMultiple !== null
           ? `(${core.requiredGrowthMultiple.toFixed(2)} ^ (1 ÷ ${monthsToNextRound})) − 1 = ${formatPercent(cmgr * 100, 2)}`
-          : 'Requires current annual revenue > 0',
+          : 'Pre-revenue (ARR = 0)',
       isAssumption: true,
-      assumptionOrigin: 'Tool Assumption (compound monthly rate)',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     fundingGap: {
       id: 'fundingGap',
       label: 'Burn shortfall',
       value: fundingGapVal,
       formattedValue:
-        cashNeeded > 0
+        effectiveCashNeeded > 0
           ? fundingGapVal && fundingGapVal > 0
-            ? formatMoney(fundingGapVal, unit)
+            ? fmtM(fundingGapVal)
             : 'None'
           : 'Not set',
       subtitle:
-        cashNeeded > 0
+        effectiveCashNeeded > 0
           ? rawGap !== null && rawGap < 0
-            ? `${formatMoney(Math.abs(rawGap), unit)} buffer above ${formatMoney(cashNeeded, unit)} burn`
-            : `burn plan needs ${formatMoney(cashNeeded, unit)}`
-          : 'enter R1 cash needed above',
-      formula: 'Burn Shortfall = max(0, R1 Cash Needed − R1 Ask)',
+            ? `${fmtM(Math.abs(rawGap))} buffer above ${fmtM(effectiveCashNeeded)} cash need`
+            : `burn plan needs ${fmtM(effectiveCashNeeded)}`
+          : 'optional monthly burn unset',
+      formula:
+        monthlyBurn > 0
+          ? 'Burn Shortfall = max(0, (Monthly Burn × Months) − R1 Ask)'
+          : 'Burn Shortfall = max(0, Cash Needed − R1 Ask)',
       calculation:
-        cashNeeded > 0
-          ? `R1 Cash Needed (${formatMoney(cashNeeded, unit)}) − R1 Ask (${formatMoney(ask, unit)}) = ${formatMoney(rawGap ?? 0, unit)}`
-          : 'R1 cash needed is 0 (optional field)',
+        monthlyBurn > 0
+          ? `${fmtM(monthlyBurn)}/mo × ${monthsToNextRound} mo = ${fmtM(effectiveCashNeeded)}; ${fmtM(effectiveCashNeeded)} − ${fmtM(ask)} = ${fmtM(rawGap ?? 0)}`
+          : effectiveCashNeeded > 0
+            ? `${fmtM(effectiveCashNeeded)} − ${fmtM(ask)} = ${fmtM(rawGap ?? 0)}`
+            : 'Monthly burn is unset (optional field)',
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark (Burn plan)',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
     askToPriorRaiseMultiple: {
       id: 'askToPriorRaiseMultiple',
@@ -612,60 +632,57 @@ export function evaluateAsk(
           : 'No R0 raise',
       subtitle:
         priorRaise > 0
-          ? `R0 raise: ${formatMoney(priorRaise, unit)}`
+          ? `R0 raise: ${fmtM(priorRaise)}`
           : 'enter R0 raise if applicable',
       formula: 'R1 Ask vs. R0 Raise = R1 Ask ÷ R0 Raise',
       calculation:
         askToPrior !== null
-          ? `${formatMoney(ask, unit)} ÷ ${formatMoney(priorRaise, unit)} = ${formatMultiple(askToPrior, 2)}`
+          ? `${fmtM(ask)} ÷ ${fmtM(priorRaise)} = ${formatMultiple(askToPrior, 2)}`
           : 'R0 raise is 0',
       isAssumption: false,
-      assumptionOrigin: 'VC Benchmark (3–4x prior raise)',
+      assumptionOrigin: LABELS.ruleOfThumbTag,
     },
   };
 
-  // Build Verdict & Diagnostic Reasons
+  // Build Pricing Check Headline & Diagnostic Reasons
   let level: VerdictLevel;
   let headline: string;
   const reasons: VerdictReason[] = [];
 
   if (annualRevenue <= 0 || core.requiredGrowthMultiple === null) {
     level = 'incomplete';
-    headline = 'Add current revenue to test if growth clears R2';
+    headline = LABELS.preRevenueHeadline;
     reasons.push({
       id: 'valuation_signal',
-      text: `Your ${formatMoney(ask, unit)} R1 ask at ${formatPercent(dilutionPct, 1)} dilution implies ${formatMoney(core.postMoney, unit)} post-money (${formatMoney(core.preMoney, unit)} pre-money). R2 pre-money must reach ${formatMoney(core.nextPreMoney, unit)}.`,
+      text: `Your ${fmtM(ask)} R1 ask at ${formatPercent(dilutionPct, 1)} dilution implies ${fmtM(core.postMoney)} post-money (${fmtM(core.preMoney)} pre-money). R2 pre-money must reach ${fmtM(core.nextPreMoney)}, or ${fmtM(core.requiredAnnualRevenue)} ARR at a ${formatMultiple(nextRoundMultiple, 1)} R2 multiple.`,
       tone: 'neutral',
       isAssumption: false,
-      origin: 'VC Benchmark',
+      origin: LABELS.ruleOfThumbTag,
     });
     reasons.push({
       id: 'missing_revenue',
-      text: `At a ${formatMultiple(nextRoundMultiple, 1)} R2 multiple, you need ${formatMoney(core.requiredAnnualRevenue, unit)} ARR (${formatMonthlyMoney(core.requiredMonthlyRevenue, unit)}) by R2. Add current revenue to see the growth multiple.`,
+      text: LABELS.preRevenueMessage,
       tone: 'neutral',
       isAssumption: false,
-      origin: 'VC Benchmark',
+      origin: LABELS.ruleOfThumbTag,
     });
   } else {
     const gx = core.requiredGrowthMultiple;
-    const cagrLabel = cagr !== null ? ` (${formatPercent(cagr * 100, 0)}/yr CAGR)` : '';
     if (gx <= effBands.reachableMax) {
       level = 'reachable';
-      headline = `Reachable: ${formatMultiple(gx, 1)} revenue growth needed in ${formatNumber(monthsToNextRound, 0)} months${cagrLabel}`;
     } else if (gx <= effBands.stretchMax) {
       level = 'stretch';
-      headline = `Stretch: ${formatMultiple(gx, 1)} revenue growth needed in ${formatNumber(monthsToNextRound, 0)} months${cagrLabel}`;
     } else {
       level = 'stiff';
-      headline = `Stiff: ${formatMultiple(gx, 1)} revenue growth needed in ${formatNumber(monthsToNextRound, 0)} months${cagrLabel}`;
     }
+    headline = LABELS.headline(formatMultiple(gx, 1), formatNumber(monthsToNextRound, 0));
 
     reasons.push({
       id: 'valuation_signal',
-      text: `Your ${formatMoney(ask, unit)} R1 ask at ${formatPercent(dilutionPct, 1)} dilution sets a ${formatMoney(core.postMoney, unit)} post-money (${formatMoney(core.preMoney, unit)} pre-money). That is ${formatMultiple(core.impliedPostMultiple, 1)} post-money (${formatMultiple(core.impliedPreMultiple, 1)} pre-money) on your ${formatMoney(annualRevenue, unit)} ARR.`,
+      text: `Your ${fmtM(ask)} R1 ask at ${formatPercent(dilutionPct, 1)} dilution sets a ${fmtM(core.postMoney)} post-money (${fmtM(core.preMoney)} pre-money). That is ${formatMultiple(core.impliedPostMultiple, 1)} post-money (${formatMultiple(core.impliedPreMultiple, 1)} pre-money) on your ${fmtM(annualRevenue)} ARR.`,
       tone: level === 'reachable' ? 'good' : level === 'stretch' ? 'warn' : 'bad',
       isAssumption: false,
-      origin: 'VC Benchmark',
+      origin: LABELS.ruleOfThumbTag,
     });
 
     // Fixed Multiple Compression Check: compare R1 multiple against R2 multiple
@@ -680,7 +697,7 @@ export function evaluateAsk(
         text: `${preCompressionNote} Because multiples drop as you scale, revenue must grow ${formatMultiple(gx, 1)} to earn a ${formatMultiple(stepUpMultiple, 1)} step-up.`,
         tone: gx > effBands.reachableMax ? 'warn' : 'neutral',
         isAssumption: false,
-        origin: 'VC Benchmark (Multiple compression)',
+        origin: LABELS.ruleOfThumbTag,
       });
     } else if (
       core.impliedPostMultiple !== null &&
@@ -691,38 +708,43 @@ export function evaluateAsk(
         text: `Your R1 post-money multiple (${formatMultiple(core.impliedPostMultiple, 1)}) is at or below your ${formatMultiple(nextRoundMultiple, 1)} R2 multiple. You have no multiple compression headwind.`,
         tone: 'good',
         isAssumption: false,
-        origin: 'VC Benchmark',
+        origin: LABELS.ruleOfThumbTag,
       });
     }
   }
 
   // Burn / Cash Needed Check
-  if (cashNeeded > 0) {
-    if (cashNeeded > ask) {
-      const gap = cashNeeded - ask;
+  if (effectiveCashNeeded > 0) {
+    const burnPrefix =
+      monthlyBurn > 0
+        ? `At ${fmtM(monthlyBurn)}/mo burn over ${formatNumber(monthsToNextRound, 0)} mo (${fmtM(effectiveCashNeeded)} total), your ${fmtM(ask)} ask`
+        : `Your ${fmtM(ask)} R1 ask`;
+
+    if (effectiveCashNeeded > ask) {
+      const gap = effectiveCashNeeded - ask;
       reasons.push({
         id: 'funding_shortfall',
-        text: `Your ${formatMoney(ask, unit)} R1 ask is ${formatMoney(gap, unit)} below your ${formatMoney(cashNeeded, unit)} burn plan. Raise more, accept higher dilution, or trim your plan.`,
+        text: `${burnPrefix} leaves a ${fmtM(gap)} shortfall. Raise more, accept higher dilution, or trim monthly burn.`,
         tone: 'bad',
         isAssumption: false,
-        origin: 'VC Benchmark (Burn plan)',
+        origin: LABELS.ruleOfThumbTag,
       });
-    } else if (cashNeeded < ask) {
-      const buffer = ask - cashNeeded;
+    } else if (effectiveCashNeeded < ask) {
+      const buffer = ask - effectiveCashNeeded;
       reasons.push({
         id: 'funding_buffer',
-        text: `Your R1 ask adds a ${formatMoney(buffer, unit)} cushion above your ${formatMoney(cashNeeded, unit)} burn plan. Extra cash reduces execution risk, though it raises your R2 valuation bar.`,
+        text: `${burnPrefix} adds a ${fmtM(buffer)} cushion above planned cash need. Extra cash reduces execution risk, though it raises your R2 valuation bar.`,
         tone: 'good',
-        isAssumption: true,
-        origin: 'Tool Assumption (Runway cushion)',
+        isAssumption: false,
+        origin: LABELS.ruleOfThumbTag,
       });
     } else {
       reasons.push({
         id: 'funding_exact',
-        text: `Your ${formatMoney(ask, unit)} R1 ask matches your ${formatMoney(cashNeeded, unit)} burn plan exactly, leaving no buffer for delays.`,
+        text: `${burnPrefix} matches your planned cash need exactly, leaving no buffer for delays.`,
         tone: 'neutral',
         isAssumption: false,
-        origin: 'VC Benchmark',
+        origin: LABELS.ruleOfThumbTag,
       });
     }
   }
@@ -733,35 +755,35 @@ export function evaluateAsk(
       if (askToPrior > 4) {
         reasons.push({
           id: 'prior_raise_high',
-          text: `Your R1 ask is ${formatMultiple(askToPrior, 1)} your R0 priced raise (${formatMoney(priorRaise, unit)}). Early raises usually jump 3x to 4x (${formatMoney(priorRaise * 3, unit)} to ${formatMoney(priorRaise * 4, unit)}), so this needs standout traction.`,
+          text: `Your R1 ask is ${formatMultiple(askToPrior, 1)} your R0 priced raise (${fmtM(priorRaise)}). Early raises usually jump 3x to 4x (${fmtM(priorRaise * 3)} to ${fmtM(priorRaise * 4)}), so this needs standout traction.`,
           tone: 'warn',
           isAssumption: false,
-          origin: 'VC Benchmark (3–4x prior raise)',
+          origin: LABELS.ruleOfThumbTag,
         });
       } else if (askToPrior < 3) {
         reasons.push({
           id: 'prior_raise_low',
-          text: `Your R1 ask is ${formatMultiple(askToPrior, 1)} your R0 priced raise (${formatMoney(priorRaise, unit)}), below the usual 3x to 4x jump.`,
+          text: `Your R1 ask is ${formatMultiple(askToPrior, 1)} your R0 priced raise (${fmtM(priorRaise)}), below the usual 3x to 4x jump.`,
           tone: 'neutral',
           isAssumption: false,
-          origin: 'VC Benchmark (3–4x prior raise)',
+          origin: LABELS.ruleOfThumbTag,
         });
       } else {
         reasons.push({
           id: 'prior_raise_ok',
-          text: `Your R1 ask is ${formatMultiple(askToPrior, 1)} your R0 priced raise (${formatMoney(priorRaise, unit)}), inside the typical 3x to 4x range.`,
+          text: `Your R1 ask is ${formatMultiple(askToPrior, 1)} your R0 priced raise (${fmtM(priorRaise)}), inside the typical 3x to 4x range.`,
           tone: 'good',
           isAssumption: false,
-          origin: 'VC Benchmark (3–4x prior raise)',
+          origin: LABELS.ruleOfThumbTag,
         });
       }
     } else {
       reasons.push({
         id: 'prior_raise_unpriced',
-        text: `Your R0 capital (${formatMoney(priorRaise, unit)}) is marked as unpriced, so the 3x to 4x priced-round check does not apply.`,
+        text: `Your R0 capital (${fmtM(priorRaise)}) is marked as unpriced, so the 3x to 4x priced-round check does not apply.`,
         tone: 'neutral',
-        isAssumption: true,
-        origin: 'Tool Assumption (Unpriced R0)',
+        isAssumption: false,
+        origin: LABELS.ruleOfThumbTag,
       });
     }
   }
@@ -770,10 +792,10 @@ export function evaluateAsk(
   if (esopTopUpPct > 0) {
     reasons.push({
       id: 'esop_impact',
-      text: `A ${formatPercent(esopTopUpPct, 1)} pre-money ESOP top-up lowers existing holders' effective R1 pre-money from ${formatMoney(core.preMoney, unit)} to ${formatMoney(effectivePreMoney, unit)}. Your R2 hurdle stays ${formatMoney(core.nextPreMoney, unit)}.`,
+      text: `A ${formatPercent(esopTopUpPct, 1)} ESOP pool (${fmtM(esopPoolValue)}) comes out of pre-money, lowering existing holders' effective R1 pre-money from ${fmtM(core.preMoney)} to ${fmtM(effectivePreMoney)}. Your R2 hurdle stays ${fmtM(core.nextPreMoney)}.`,
       tone: 'warn',
       isAssumption: false,
-      origin: 'VC Benchmark (ESOP dilution)',
+      origin: LABELS.ruleOfThumbTag,
     });
   }
 
@@ -784,7 +806,7 @@ export function evaluateAsk(
       text: `A ${formatNumber(monthsToNextRound, 0)} month runway to R2 sits outside the usual 15 to 18 month seed cycle. Your annual growth target adjusts for the ${monthsToNextRound > 18 ? 'longer' : 'shorter'} timeline.`,
       tone: 'neutral',
       isAssumption: false,
-      origin: 'VC Benchmark (15–18 mo horizon)',
+      origin: LABELS.ruleOfThumbTag,
     });
   }
 
@@ -859,8 +881,14 @@ export function solveGoalSeek(
   input: CheckInput,
   target: GoalSeekTarget,
   targetGrowthMultiple?: number,
-  unit: CurrencyUnit = 'INR_CR'
+  unit: CurrencyUnit = 'INR_CR',
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
 ): GoalSeekResult {
+  const fmtM = (v: number | null | undefined, maxDecimals?: number) =>
+    formatMoney(v, unit, maxDecimals, fxInrPerUsd);
+  const fmtMM = (v: number | null | undefined) =>
+    formatMonthlyMoney(v, unit, fxInrPerUsd);
+
   const effBands = computeEffectiveVerdictBands(input);
   const gMax =
     targetGrowthMultiple !== undefined && targetGrowthMultiple > 0
@@ -893,9 +921,9 @@ export function solveGoalSeek(
         targetGrowthMultiple: gMax,
         solvedValue: null,
         formattedSolvedValue: '-',
-        summary: 'Enter current revenue and R1 dilution to solve for Max R1 Ask.',
+        summary: 'Pre-revenue (ARR = 0): revenue goal-seek applies once annual revenue is positive.',
         formula: 'Max R1 Ask = Current ARR × Target Growth × R2 Multiple × (R1 Dilution ÷ R2 Step-Up)',
-        calculation: 'Waiting for revenue > 0 and dilution in (0%, 100%)',
+        calculation: 'Pre-revenue (ARR = 0) and dilution in (0%, 100%)',
         isFeasible: false,
         infeasibleReason: 'Requires current annual revenue > 0.',
         feasibleAskBand,
@@ -909,11 +937,11 @@ export function solveGoalSeek(
       target,
       targetGrowthMultiple: gMax,
       solvedValue: maxAsk,
-      formattedSolvedValue: formatMoney(maxAsk, unit),
-      secondaryFormattedValue: `${formatMoney(maxPost, unit)} R1 post-money`,
-      summary: `To cap required growth at ${formatMultiple(gMax, 1)} (with ${formatPercent(dilutionPct, 1)} R1 dilution and a ${formatMultiple(nextRoundMultiple, 1)} R2 multiple), keep your R1 ask at or below ${formatMoney(maxAsk, unit)}. That sets ${formatMoney(maxPost, unit)} post-money.`,
+      formattedSolvedValue: fmtM(maxAsk),
+      secondaryFormattedValue: `${fmtM(maxPost)} R1 post-money`,
+      summary: `To cap required growth at ${formatMultiple(gMax, 1)} (with ${formatPercent(dilutionPct, 1)} R1 dilution and a ${formatMultiple(nextRoundMultiple, 1)} R2 multiple), keep your R1 ask at or below ${fmtM(maxAsk)}. That sets ${fmtM(maxPost)} post-money.`,
       formula: 'Max R1 Ask = Current ARR × Target Growth × R2 Multiple × (R1 Dilution % ÷ 100) ÷ R2 Step-Up',
-      calculation: `${formatMoney(annualRevenue, unit)} × ${formatMultiple(gMax, 2)} × ${formatMultiple(nextRoundMultiple, 2)} × ${(dFrac).toFixed(4).replace(/\.?0+$/, '')} ÷ ${formatMultiple(stepUpMultiple, 2)} = ${formatMoney(maxAsk, unit)}`,
+      calculation: `${fmtM(annualRevenue)} × ${formatMultiple(gMax, 2)} × ${formatMultiple(nextRoundMultiple, 2)} × ${(dFrac).toFixed(4).replace(/\.?0+$/, '')} ÷ ${formatMultiple(stepUpMultiple, 2)} = ${fmtM(maxAsk)}`,
       isFeasible: maxAsk > 0,
       feasibleAskBand,
     };
@@ -944,11 +972,11 @@ export function solveGoalSeek(
       target,
       targetGrowthMultiple: gMax,
       solvedValue: reqCurrentArr,
-      formattedSolvedValue: formatMoney(reqCurrentArr, unit),
-      secondaryFormattedValue: formatMonthlyMoney(reqCurrentMrr, unit),
-      summary: `To support a ${formatMoney(ask, unit)} R1 ask at ${formatPercent(dilutionPct, 1)} dilution without exceeding ${formatMultiple(gMax, 1)} growth, you need ${formatMoney(reqCurrentArr, unit)} ARR today (${formatMonthlyMoney(reqCurrentMrr, unit)}).`,
+      formattedSolvedValue: fmtM(reqCurrentArr),
+      secondaryFormattedValue: fmtMM(reqCurrentMrr),
+      summary: `To support a ${fmtM(ask)} R1 ask at ${formatPercent(dilutionPct, 1)} dilution without exceeding ${formatMultiple(gMax, 1)} growth, you need ${fmtM(reqCurrentArr)} ARR today (${fmtMM(reqCurrentMrr)}).`,
       formula: 'Required Current ARR = (R1 Ask ÷ (R1 Dilution % ÷ 100)) × R2 Step-Up ÷ (R2 Multiple × Target Growth)',
-      calculation: `${formatMoney(reqNextArr, unit)} R2 ARR ÷ ${formatMultiple(gMax, 2)} = ${formatMoney(reqCurrentArr, unit)} (${formatMonthlyMoney(reqCurrentMrr, unit)})`,
+      calculation: `${fmtM(reqNextArr)} R2 ARR ÷ ${formatMultiple(gMax, 2)} = ${fmtM(reqCurrentArr)} (${fmtMM(reqCurrentMrr)})`,
       isFeasible: reqCurrentArr > 0,
       feasibleAskBand,
     };
@@ -961,7 +989,7 @@ export function solveGoalSeek(
       targetGrowthMultiple: gMax,
       solvedValue: null,
       formattedSolvedValue: '-',
-      summary: 'Enter an R1 ask and current revenue to solve for R1 dilution.',
+      summary: 'Enter a positive R1 ask and current ARR to solve for R1 dilution.',
       formula: 'Required R1 Dilution % = (R1 Ask × R2 Step-Up) ÷ (Current ARR × Target Growth × R2 Multiple) × 100',
       calculation: 'Waiting for ask > 0 and current revenue > 0',
       isFeasible: false,
@@ -980,12 +1008,12 @@ export function solveGoalSeek(
     targetGrowthMultiple: gMax,
     solvedValue: reqDilutionPct,
     formattedSolvedValue: formatPercent(reqDilutionPct, 1),
-    secondaryFormattedValue: `${formatMoney(maxPost, unit)} R1 post-money`,
+    secondaryFormattedValue: `${fmtM(maxPost)} R1 post-money`,
     summary: isFeasible
-      ? `To raise ${formatMoney(ask, unit)} on ${formatMoney(annualRevenue, unit)} ARR within ${formatMultiple(gMax, 1)} growth, R1 dilution must be ${formatPercent(reqDilutionPct, 1)}. That prices R1 at ${formatMoney(maxPost, unit)} post-money.`
-      : `Even at 100% dilution, a ${formatMoney(ask, unit)} raise exceeds the ${formatMoney(maxPost, unit)} post-money backed by ${formatMultiple(gMax, 1)} growth (requires ${formatPercent(reqDilutionPct, 1)}). Lower the ask or grow revenue first.`,
+      ? `To raise ${fmtM(ask)} on ${fmtM(annualRevenue)} ARR within ${formatMultiple(gMax, 1)} growth, R1 dilution must be ${formatPercent(reqDilutionPct, 1)}. That prices R1 at ${fmtM(maxPost)} post-money.`
+      : `Even at 100% dilution, a ${fmtM(ask)} raise exceeds the ${fmtM(maxPost)} post-money backed by ${formatMultiple(gMax, 1)} growth (requires ${formatPercent(reqDilutionPct, 1)}). Lower the ask or grow revenue first.`,
     formula: 'Required R1 Dilution % = (R1 Ask ÷ ((Current ARR × Target Growth × R2 Multiple) ÷ R2 Step-Up)) × 100',
-    calculation: `(${formatMoney(ask, unit)} ÷ ${formatMoney(maxPost, unit)} max R1 post-money) × 100 = ${formatPercent(reqDilutionPct, 2)}`,
+    calculation: `(${fmtM(ask)} ÷ ${fmtM(maxPost)} max R1 post-money) × 100 = ${formatPercent(reqDilutionPct, 2)}`,
     isFeasible,
     infeasibleReason: !isFeasible
       ? `Required dilution (${formatPercent(reqDilutionPct, 1)}) exceeds available equity.`

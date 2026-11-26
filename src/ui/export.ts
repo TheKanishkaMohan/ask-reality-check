@@ -1,4 +1,6 @@
 import {
+  DEFAULT_FX_INR_PER_USD,
+  LABELS,
   UNIT_METADATA,
   evaluateAsk,
   formatMoney,
@@ -15,41 +17,55 @@ export function generateMarkdownSummary(
   input: CheckInput,
   unit: CurrencyUnit,
   goalSeekTarget: GoalSeekTarget = 'max_ask',
-  goalSeekGrowth?: number
+  goalSeekGrowth?: number,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
 ): string {
-  const out = evaluateAsk(input, unit);
+  const out = evaluateAsk(input, unit, fxInrPerUsd);
   const seek = solveGoalSeek(
     input,
     goalSeekTarget,
     goalSeekGrowth ?? input.verdictBands.reachableMax,
-    unit
+    unit,
+    fxInrPerUsd
   );
-  const unitLabel = UNIT_METADATA[unit].shortUnit;
+  const unitLabel =
+    unit === 'USD_M'
+      ? `${UNIT_METADATA[unit].shortUnit} at ₹${fxInrPerUsd}/USD`
+      : UNIT_METADATA[unit].shortUnit;
   const monthlyRev = input.annualRevenue / 12;
+  const effectiveMonthlyBurn = input.monthlyBurn ?? 0;
+  const effectiveBurnNeed =
+    effectiveMonthlyBurn > 0
+      ? effectiveMonthlyBurn * input.monthsToNextRound
+      : input.cashNeeded;
 
   const lines: string[] = [
     `# Valuation Check: Summary (${unitLabel})`,
     ``,
-    `**Verdict:** ${out.verdict.headline}`,
+    `**${LABELS.pricingCheckTitle}:** ${out.verdict.headline}`,
     ``,
     `## 1. Inputs`,
-    `- **R1 Ask (Raise):** ${formatMoney(input.ask, unit)}`,
+    `- **R1 Ask (Raise):** ${formatMoney(input.ask, unit, 2, fxInrPerUsd)}`,
     `- **R1 Dilution:** ${formatPercent(input.dilutionPct, 1)}`,
-    `- **Current Revenue:** ${formatMoney(input.annualRevenue, unit)} ARR (${formatMonthlyMoney(monthlyRev, unit)})`,
+    `- **Current Revenue:** ${formatMoney(input.annualRevenue, unit, 2, fxInrPerUsd)} ARR (${formatMonthlyMoney(monthlyRev, unit, fxInrPerUsd)})`,
     `- **R2 Valuation Step-Up:** ${formatMultiple(input.stepUpMultiple, 1)} in ${input.monthsToNextRound} months`,
-    `- **R2 Revenue Multiple:** ${formatMultiple(input.nextRoundMultiple, 1)} _(assumption)_`,
+    `- **R2 Revenue Multiple:** ${formatMultiple(input.nextRoundMultiple, 1)} _(${LABELS.ruleOfThumbTag})_`,
   ];
 
-  if (input.cashNeeded > 0) {
-    lines.push(`- **R1 Cash Needed (Burn Plan):** ${formatMoney(input.cashNeeded, unit)}`);
+  if (effectiveMonthlyBurn > 0) {
+    lines.push(
+      `- **Monthly Net Burn:** ${formatMonthlyMoney(effectiveMonthlyBurn, unit, fxInrPerUsd)} (${formatMoney(effectiveBurnNeed, unit, 2, fxInrPerUsd)} over ${input.monthsToNextRound} mo)`
+    );
+  } else if (input.cashNeeded > 0) {
+    lines.push(`- **R1 Cash Needed:** ${formatMoney(input.cashNeeded, unit, 2, fxInrPerUsd)}`);
   }
   if (input.priorRaise > 0) {
     lines.push(
-      `- **R0 Raise:** ${formatMoney(input.priorRaise, unit)} (${input.priorRaiseWasPriced ? 'priced round' : 'unpriced'})`
+      `- **R0 Raise:** ${formatMoney(input.priorRaise, unit, 2, fxInrPerUsd)} (${input.priorRaiseWasPriced ? 'priced round' : 'unpriced'})`
     );
   }
   if (input.esopTopUpPct > 0) {
-    lines.push(`- **R1 ESOP Pool Top-Up:** ${formatPercent(input.esopTopUpPct, 1)} of post-money`);
+    lines.push(`- **ESOP Pool Created This Round:** ${formatPercent(input.esopTopUpPct, 1)} of post-money`);
   }
 
   lines.push(
@@ -58,22 +74,22 @@ export function generateMarkdownSummary(
     `| Metric | Value | Formula / Note |`,
     `| :--- | :--- | :--- |`,
     `| **R1 Post-Money** | ${out.metrics.impliedPostMoney.formattedValue} | ${out.metrics.impliedPostMoney.subtitle} |`,
-    `| **R1 Pre-Money** | ${out.metrics.impliedPreMoney.formattedValue} | ${out.metrics.impliedPreMoney.subtitle} |`
+    `| **R1 Pre-Money** | ${out.metrics.impliedPreMoney.formattedValue} | ${out.metrics.impliedPreMoney.subtitle} |`,
+    `| **Effective R1 Pre-Money (after ESOP)** | ${out.metrics.effectivePreMoneyAfterEsop.formattedValue} | ${out.metrics.effectivePreMoneyAfterEsop.subtitle} |`
   );
-
-  if (input.esopTopUpPct > 0) {
-    lines.push(
-      `| **Effective R1 Pre-Money (after ESOP)** | ${out.metrics.effectivePreMoneyAfterEsop.formattedValue} | ${out.metrics.effectivePreMoneyAfterEsop.subtitle} |`
-    );
-  }
 
   lines.push(
     `| **R1 Revenue Multiple** | ${out.metrics.impliedPostRevenueMultiple.formattedValue} | ${out.metrics.impliedPostRevenueMultiple.subtitle} |`,
     `| **R2 Pre-Money** | ${out.metrics.nextRoundPreMoney.formattedValue} | ${out.metrics.nextRoundPreMoney.subtitle} |`,
     `| **Required R2 ARR** | ${out.metrics.requiredNextAnnualRevenue.formattedValue} | ${out.metrics.requiredNextAnnualRevenue.subtitle} |`,
-    `| **Required Revenue Growth** | ${out.metrics.requiredGrowthMultiple.formattedValue} | ${out.metrics.requiredGrowthMultiple.subtitle} |`,
-    `| **Burn Shortfall** | ${out.metrics.fundingGap.formattedValue} | ${out.metrics.fundingGap.subtitle} |`
+    `| **Required Revenue Growth** | ${out.metrics.requiredGrowthMultiple.formattedValue} | ${out.metrics.requiredGrowthMultiple.subtitle} |`
   );
+
+  if (effectiveBurnNeed > 0) {
+    lines.push(
+      `| **Burn Shortfall** | ${out.metrics.fundingGap.formattedValue} | ${out.metrics.fundingGap.subtitle} |`
+    );
+  }
 
   lines.push(``, `## 3. Diagnostic Notes`);
   out.verdict.reasons.forEach((r) => {
@@ -84,12 +100,12 @@ export function generateMarkdownSummary(
     lines.push(
       ``,
       `## 4. Goal-Seek & Feasible Ask Band`,
-      `- **Reachable Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.reachableMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit)}`,
-      `- **Stretch Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.stretchMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit)}`
+      `- **Conservative Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.reachableMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit, 2, fxInrPerUsd)}`,
+      `- **Stretch Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.stretchMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit, 2, fxInrPerUsd)}`
     );
     if (out.feasibleAskBand.priorRaiseBand) {
       lines.push(
-        `- **3x to 4x Priced R0 Band:** ${formatMoney(out.feasibleAskBand.priorRaiseBand[0], unit)} to ${formatMoney(out.feasibleAskBand.priorRaiseBand[1], unit)}`
+        `- **3x to 4x Priced R0 Band:** ${formatMoney(out.feasibleAskBand.priorRaiseBand[0], unit, 2, fxInrPerUsd)} to ${formatMoney(out.feasibleAskBand.priorRaiseBand[1], unit, 2, fxInrPerUsd)}`
       );
     }
     lines.push(`- **Goal-Seek (${seek.target.replace('_', ' ')}):** ${seek.summary}`);
@@ -112,7 +128,7 @@ export function generateMarkdownSummary(
           ? formatMultiple(row.requiredGrowthMultiple, 1)
           : '-';
       lines.push(
-        `| ${formatPercent(row.dilutionPct, 1)}${row.isUserSelected ? ' *(yours)*' : ''} | ${formatMoney(row.postMoney, unit)} | ${formatMoney(row.preMoney, unit)} | ${multStr} | ${formatMoney(row.nextPreMoney, unit)} | ${gxStr} |`
+        `| ${formatPercent(row.dilutionPct, 1)}${row.isUserSelected ? ' *(yours)*' : ''} | ${formatMoney(row.postMoney, unit, 2, fxInrPerUsd)} | ${formatMoney(row.preMoney, unit, 2, fxInrPerUsd)} | ${multStr} | ${formatMoney(row.nextPreMoney, unit, 2, fxInrPerUsd)} | ${gxStr} |`
       );
     });
   }

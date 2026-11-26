@@ -1,18 +1,22 @@
 import {
   ASSUMPTION_REFERENCES,
+  DEFAULT_FX_INR_PER_USD,
+  LABELS,
   PRESET_SCENARIOS,
   SECTOR_MULTIPLE_BENCHMARKS,
   UNIT_METADATA,
   computeAskDilutionHeatmap,
   computeOwnershipWaterfall,
-  convertUnitScale,
   evaluateAsk,
+  formatInputValue,
   formatMoney,
   formatMonthlyMoney,
   formatMultiple,
   formatNumber,
   formatPercent,
+  fromCr,
   solveGoalSeek,
+  toCr,
   type CheckOutput,
   type CurrencyUnit,
   type GoalSeekTarget,
@@ -52,14 +56,16 @@ function renderTraceDetails(
   traceId: string,
   formula: string,
   calculation: string,
-  isAssumption: boolean,
+  _isAssumption: boolean,
   origin: string,
   openTraces: Set<string>
 ): string {
   const isOpen = openTraces.has(traceId) ? ' open' : '';
-  const chipClass = isAssumption ? 'chip chip--primary' : 'chip chip--rolling';
-  const chipLabel = isAssumption ? 'Tool assumption' : 'VC benchmark';
-  const showDetailOrigin = origin.trim().toLowerCase() !== chipLabel.toLowerCase();
+  const chipLabel = LABELS.ruleOfThumbTag;
+  const trimmedOrigin = origin.trim();
+  const showDetailOrigin =
+    trimmedOrigin.length > 0 &&
+    trimmedOrigin.toLowerCase() !== chipLabel.toLowerCase();
   return `
     <details class="trace" data-trace-id="${escapeHtml(traceId)}"${isOpen}>
       <summary>How this is calculated</summary>
@@ -67,8 +73,8 @@ function renderTraceDetails(
         <div class="trace-formula">${escapeHtml(formula)}</div>
         <div class="trace-calc">${escapeHtml(calculation)}</div>
         <div class="trace-origin">
-          <span class="${chipClass}">${escapeHtml(chipLabel)}</span>
-          ${showDetailOrigin ? `<span>${escapeHtml(origin)}</span>` : ''}
+          <span class="chip chip--rolling">${escapeHtml(chipLabel)}</span>
+          ${showDetailOrigin ? `<span>${escapeHtml(trimmedOrigin)}</span>` : ''}
         </div>
       </div>
     </details>
@@ -121,34 +127,40 @@ function renderSignalCard(
   `;
 }
 
-function renderBurnComparisonBar(output: CheckOutput): string {
+function renderBurnComparisonBar(
+  output: CheckOutput,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
   const { input, unit } = output;
-  if (!output.validation.valid || input.cashNeeded <= 0) return '';
+  const monthlyBurn = input.monthlyBurn ?? 0;
+  const effectiveBurnNeed =
+    monthlyBurn > 0 ? monthlyBurn * input.monthsToNextRound : input.cashNeeded;
+  if (!output.validation.valid || effectiveBurnNeed <= 0) return '';
 
   const ask = Math.max(0, input.ask);
-  const cash = Math.max(0, input.cashNeeded);
+  const cash = Math.max(0, effectiveBurnNeed);
   const diff = cash - ask;
   const maxVal = Math.max(ask, cash, 1);
   const askW = Math.max(8, Math.round((ask / maxVal) * 420));
   const cashW = Math.max(8, Math.round((cash / maxVal) * 420));
 
   let chipCls = 'chip chip--rolling';
-  let statusText = `Exact match: Ask equals ${formatMoney(cash, unit)} burn plan`;
+  let statusText = `Exact match: Ask equals ${formatMoney(cash, unit, undefined, fxInrPerUsd)} burn plan`;
   let askFill = '#007aff';
 
   if (diff > 0) {
     chipCls = 'chip chip--closed';
-    statusText = `Shortfall: ${formatMoney(diff, unit)} below ${formatMoney(cash, unit)} burn plan`;
+    statusText = `Shortfall: ${formatMoney(diff, unit, undefined, fxInrPerUsd)} below ${formatMoney(cash, unit, undefined, fxInrPerUsd)} burn need`;
     askFill = '#ff3b30';
   } else if (diff < 0) {
     chipCls = 'chip chip--open';
-    statusText = `Buffer: ${formatMoney(Math.abs(diff), unit)} above ${formatMoney(cash, unit)} burn plan`;
+    statusText = `Buffer: ${formatMoney(Math.abs(diff), unit, undefined, fxInrPerUsd)} above ${formatMoney(cash, unit, undefined, fxInrPerUsd)} burn need`;
     askFill = '#1b7a35';
   }
 
   return `
     <div class="vc-burn-bar__head">
-      <span><strong>Burn plan check</strong> (${formatMoney(ask, unit)} ask vs. ${formatMoney(cash, unit)} needed)</span>
+      <span><strong>Burn plan check</strong> (${formatMoney(ask, unit, undefined, fxInrPerUsd)} ask vs. ${formatMoney(cash, unit, undefined, fxInrPerUsd)} needed)</span>
       <span class="${chipCls}">${escapeHtml(statusText)}</span>
     </div>
     <svg class="vc-chart-svg vc-chart-svg--mini" viewBox="0 0 440 28" role="img" aria-label="${escapeXml(statusText)}">
@@ -161,16 +173,17 @@ function renderBurnComparisonBar(output: CheckOutput): string {
 }
 
 const VERDICT_BADGE_MAP: Record<VerdictLevel, { cls: string; label: string }> = {
-  reachable: { cls: 'chip chip--open', label: 'Reachable' },
-  stretch: { cls: 'chip chip--soon', label: 'Stretch' },
-  stiff: { cls: 'chip chip--closed', label: 'Stiff' },
-  invalid: { cls: 'chip chip--closed', label: 'Check inputs' },
-  incomplete: { cls: 'chip chip--rolling', label: 'Add revenue' },
+  reachable: { cls: 'chip chip--open', label: LABELS.bands.reachable },
+  stretch: { cls: 'chip chip--soon', label: LABELS.bands.stretch },
+  stiff: { cls: 'chip chip--closed', label: LABELS.bands.stiff },
+  invalid: { cls: 'chip chip--closed', label: LABELS.bands.invalid },
+  incomplete: { cls: 'chip chip--rolling', label: LABELS.bands.incomplete },
 };
 
 export function mountCheckerApp(root: HTMLElement, initialState: AppState): void {
   const state: AppState = {
     unit: initialState.unit,
+    fxInrPerUsd: initialState.fxInrPerUsd,
     activePresetId: initialState.activePresetId,
     input: {
       ...initialState.input,
@@ -182,22 +195,27 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
 
   const openTraces = new Set<string>();
 
-  const rulesHtml = ASSUMPTION_REFERENCES.map((item) => {
-    const isAssumption = item.origin === 'Tool Assumption';
-    const chipClass = isAssumption ? 'chip chip--primary' : 'chip chip--rolling';
-    return `
+  const rulesHtml = ASSUMPTION_REFERENCES.map(
+    (item) => `
       <li class="vc-rule-item">
         <div class="vc-rule-item__head">
           <span class="vc-rule-item__title">${escapeHtml(item.parameter)}</span>
           <span class="vc-rule-item__chips">
-            <span class="chip chip--rolling">${escapeHtml(item.defaultValue)}</span>
-            <span class="${chipClass}">${escapeHtml(item.origin)}</span>
+            <span class="chip chip--primary">${escapeHtml(item.defaultValue)}</span>
+            <span class="chip chip--rolling">${escapeHtml(item.origin)}</span>
           </span>
         </div>
         <p class="vc-rule-item__body">${escapeHtml(item.explanation)}</p>
       </li>
-    `;
-  }).join('');
+    `
+  ).join('');
+
+  const indiaNotesHtml = LABELS.indiaNotes
+    .map(
+      (note) =>
+        `<li><strong>${escapeHtml(note.title)}:</strong> ${escapeHtml(note.body)}</li>`
+    )
+    .join('');
 
   const sectorRowsHtml = SECTOR_MULTIPLE_BENCHMARKS.map(
     (b) => `
@@ -257,10 +275,16 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
           <h2 class="tkm-sr">Valuation Check calculator</h2>
 
           <div class="tkm-toolbar">
-            <div class="tkm-segmented" id="unit-switcher" role="group" aria-label="Currency and unit selection">
-              <button type="button" class="tkm-seg-btn" data-unit="INR_CR" aria-pressed="true">₹ Cr</button>
-              <button type="button" class="tkm-seg-btn" data-unit="INR_LAKH" aria-pressed="false">₹ Lakh</button>
-              <button type="button" class="tkm-seg-btn" data-unit="USD_M" aria-pressed="false">USD ($M)</button>
+            <div class="vc-toolbar-left">
+              <div class="tkm-segmented" id="unit-switcher" role="group" aria-label="Currency and unit selection">
+                <button type="button" class="tkm-seg-btn" data-unit="INR_CR" aria-pressed="true">₹ Cr</button>
+                <button type="button" class="tkm-seg-btn" data-unit="INR_LAKH" aria-pressed="false">₹ Lakh</button>
+                <button type="button" class="tkm-seg-btn" data-unit="USD_M" aria-pressed="false">USD ($M)</button>
+              </div>
+              <div class="vc-fx-wrap" id="fx-wrap" hidden>
+                <label for="fx-rate">FX ₹/USD</label>
+                <input id="fx-rate" class="tkm-input vc-fx-input" type="number" step="0.1" min="1" max="500" inputmode="decimal" aria-label="USD to INR exchange rate" />
+              </div>
             </div>
             <div class="vc-toolbar-actions">
               <button type="button" id="download-xlsx-btn" class="btn btn--primary btn--sm" aria-label="Download scenario workbook as XLSX">
@@ -269,27 +293,174 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
             </div>
           </div>
 
-          <div class="vc-config-stack">
-            <details id="examples-panel" class="tkm-filters-panel">
-              <summary>
-                <span class="tkm-filters-panel__title">
-                  <span class="tkm-filters-panel__badge">Examples</span>
-                  Sample scenarios
-                </span>
-                <span class="tkm-filters-panel__right">
-                  <span id="active-preset-chip" class="chip chip--rolling">Optional</span>
-                  <span class="tkm-filters-panel__toggle" aria-hidden="true"></span>
-                </span>
-              </summary>
-              <div class="tkm-filters-panel__body">
-                <div class="tkm-filter-pills" id="presets" role="group" aria-label="Examples"></div>
-                <p id="pnote" class="vc-preset-note" hidden></p>
+          <section class="vc-results-stack" aria-label="Pricing check summary" aria-live="polite" id="results-top">
+            <div class="vc-card vc-verdict-card" id="verdict-box">
+              <div class="vc-card__head">
+                <p class="vc-eyebrow">${escapeHtml(LABELS.pricingCheckTitle)}</p>
+                <span class="chip chip--open" id="vbadge">${escapeHtml(LABELS.bands.reachable)}</span>
               </div>
-            </details>
+              <h3 class="vc-verdict-title" id="vh"></h3>
+              <div class="vc-verdict-stats" id="verdict-stats"></div>
+              <p class="vc-esop-note" id="verdict-esop-note" hidden></p>
+              <p class="vc-pre-rev-callout" id="verdict-prerev-callout" hidden></p>
+              <ul class="vc-reasons" id="vreasons"></ul>
+              <div class="vc-verdict-foot-row">
+                <div class="vc-verdict-foot-meta">
+                  <p class="vc-verdict-foot" id="verdict-band-badge"></p>
+                  <span class="chip chip--rolling">${escapeHtml(LABELS.ruleOfThumbTag)}</span>
+                </div>
+                <p class="vc-source-note">${escapeHtml(LABELS.benchmarkSourceLine)}</p>
+              </div>
+            </div>
+          </section>
+
+          <div class="vc-config-stack">
+            <section class="vc-card vc-config-card" aria-label="Inputs">
+              <div class="vc-card__head">
+                <div>
+                  <p class="vc-eyebrow">Configuration: R1 &amp; R2</p>
+                  <small class="vc-hint"><span id="unit-hint">Amounts in ₹ Cr</span> · R0 Last · R1 Now · R2 Next</small>
+                </div>
+                <div class="vc-preset-bar" id="presets" role="group" aria-label="Sample scenarios"></div>
+              </div>
+              <p id="pnote" class="vc-preset-note" hidden></p>
+
+              <div class="vc-grid-4">
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="mrr">Current monthly revenue</label>
+                    ${renderInfoTip(
+                      'tip-mrr',
+                      'Current monthly revenue',
+                      'Current monthly run-rate revenue today. Editing this automatically updates annual revenue (x 12).'
+                    )}
+                  </div>
+                  <input id="mrr" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
+                  <small id="mrr-sub">₹ Cr/mo (synced with ARR ÷ 12)</small>
+                </div>
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="rev">Current annual revenue (ARR)</label>
+                    ${renderInfoTip(
+                      'tip-rev',
+                      'Current annual revenue (ARR)',
+                      'Annualised revenue run-rate today (monthly x 12). Sets your starting revenue base for R1 multiples and R2 growth.'
+                    )}
+                  </div>
+                  <input id="rev" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
+                  <small id="rev-sub">₹ Cr (monthly x 12)</small>
+                  <div class="vc-field-error" id="err-rev" hidden></div>
+                </div>
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="ask">R1 ask (raise)</label>
+                    ${renderInfoTip(
+                      'tip-ask',
+                      'R1 ask',
+                      'Capital you plan to raise in this round (R1). Together with R1 dilution, this sets your R1 valuation.',
+                      true
+                    )}
+                  </div>
+                  <input id="ask" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
+                  <small id="ask-unit-sub">₹ Cr target raise in R1</small>
+                  <div class="vc-field-error" id="err-ask" hidden></div>
+                </div>
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="dil">R1 dilution (%)</label>
+                    ${renderInfoTip(
+                      'tip-dil',
+                      'R1 dilution',
+                      'Equity % sold to new investors in R1 (usually 20% to 25%). Lower dilution raises your implied valuation.',
+                      true
+                    )}
+                  </div>
+                  <input id="dil" class="tkm-input" type="number" step="any" min="0.1" max="99.9" inputmode="decimal" />
+                  <small>% equity sold in R1 (20% to 25% std)</small>
+                  <div class="vc-field-error" id="err-dil" hidden></div>
+                </div>
+              </div>
+
+              <div class="vc-grid-4">
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="esop">ESOP pool created this round (% of post-money)</label>
+                    ${renderInfoTip(
+                      'tip-esop',
+                      'ESOP pool created this round',
+                      'Option pool carved out at R1 as a % of post-money valuation. It comes out of pre-money, reducing founders effective pre-money while R1 investor dilution stays unchanged.'
+                    )}
+                  </div>
+                  <input id="esop" class="tkm-input" type="number" step="any" min="0" max="50" inputmode="decimal" />
+                  <small>0% if none; deducted from pre-money</small>
+                  <div class="vc-field-error" id="err-esop" hidden></div>
+                </div>
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="months">Months to R2</label>
+                    ${renderInfoTip(
+                      'tip-months',
+                      'Months to R2',
+                      'Runway months from R1 close to your next priced round (R2). Standard seed staging is 15 to 18 months.'
+                    )}
+                  </div>
+                  <input id="months" class="tkm-input" type="number" step="1" min="1" max="120" inputmode="numeric" />
+                  <small>15 to 18 mo standard</small>
+                  <div class="vc-field-error" id="err-months" hidden></div>
+                </div>
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="step">R2 valuation step-up (x)</label>
+                    ${renderInfoTip(
+                      'tip-step',
+                      'R2 valuation step-up',
+                      'Minimum valuation jump R1 investors expect between R1 post-money and R2 pre-money (R2 Pre = R1 Post x Step-up). Benchmark is 2x.',
+                      true
+                    )}
+                  </div>
+                  <input id="step" class="tkm-input" type="number" step="any" min="1" inputmode="decimal" />
+                  <small>R2 pre ÷ R1 post (2x std)</small>
+                  <div class="vc-field-error" id="err-step" hidden></div>
+                </div>
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="mult">R2 revenue multiple (x ARR)</label>
+                    ${renderInfoTip(
+                      'tip-mult',
+                      'R2 revenue multiple',
+                      'Expected valuation-to-ARR multiple in R2. Revenue multiples fit software and high-margin brands best. You can also click any cell in Indicative sector multiples below to apply it.',
+                      true
+                    )}
+                  </div>
+                  <input id="mult" class="tkm-input" type="number" step="any" min="0.1" inputmode="decimal" />
+                  <small>x ARR at next round (R2)</small>
+                  <div class="vc-field-error" id="err-mult" hidden></div>
+                </div>
+              </div>
+
+              <div class="vc-burn-row">
+                <div class="vc-field">
+                  <div class="vc-field__head">
+                    <label for="burn">Monthly net burn (optional)</label>
+                    ${renderInfoTip(
+                      'tip-burn',
+                      'Monthly net burn',
+                      'Optional monthly cash burn rate. When entered, total cash needed = Monthly net burn x Months to R2. Leave blank to hide the burn check.'
+                    )}
+                  </div>
+                  <input id="burn" class="tkm-input" type="number" step="any" min="0" placeholder="Optional (leave blank if unsure)" inputmode="decimal" />
+                  <small id="burn-sub">₹ Cr/mo (0 or blank hides burn check)</small>
+                  <div class="vc-field-error" id="err-burn" hidden></div>
+                </div>
+                <p class="vc-burn-readout" id="burn-cash-readout">
+                  Optional. Leave blank to hide burn check.
+                </p>
+              </div>
+            </section>
 
             <details class="tkm-accordion" id="settings-drawer">
               <summary>
-                <span class="tkm-accordion__title">Last round (R0) &amp; ESOP</span>
+                <span class="tkm-accordion__title">Last round (R0) &amp; ownership waterfall</span>
                 <span class="tkm-accordion__right">
                   <span class="chip chip--rolling" id="settings-summary-chip">Optional</span>
                   <span class="tkm-accordion__plus" aria-hidden="true"></span>
@@ -297,9 +468,9 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
               </summary>
               <div class="tkm-accordion__body tkm-accordion__body--pad">
                 <p class="vc-r0-note">
-                  Optional starting point before R1. R0 checks if your raise jump is realistic; ESOP lowers founders' effective R1 pre-money while R2 targets stay unchanged.
+                  Optional starting point before R1. R0 checks whether your R1 ask jump is realistic and projects founder ownership through R0, R1 ESOP, R1, and an illustrative R2 round.
                 </p>
-                <div class="vc-grid-2">
+                <div class="vc-grid-3">
                   <div class="vc-field">
                     <div class="vc-field__head">
                       <label for="prior">R0 raise</label>
@@ -329,29 +500,13 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                   </div>
                   <div class="vc-field">
                     <div class="vc-field__head">
-                      <label for="esop">R1 ESOP top-up</label>
-                      ${renderInfoTip(
-                        'tip-esop',
-                        'R1 ESOP top-up',
-                        'New option pool added at R1 as a % of post-money. This reduces existing shareholders effective R1 pre-money, not your R2 target.'
-                      )}
-                    </div>
-                    <input id="esop" class="tkm-input" type="number" step="any" min="0" max="50" inputmode="decimal" />
-                    <small>% of post-money; lowers effective R1 pre-money</small>
-                    <div class="vc-field-error" id="err-esop" hidden></div>
-                  </div>
-                  <div class="vc-field">
-                    <div class="vc-field__head">
                       <label for="r2-dil">Illustrative R2 dilution</label>
-                      <span class="vc-field__head-right">
-                        <span class="chip chip--primary">Assumption</span>
-                        ${renderInfoTip(
-                          'tip-r2-dil',
-                          'Illustrative R2 dilution',
-                          'Illustrative equity % sold in R2 (20% typical). Used only to project post-R2 founder stake in the ownership waterfall.',
-                          true
-                        )}
-                      </span>
+                      ${renderInfoTip(
+                        'tip-r2-dil',
+                        'Illustrative R2 dilution',
+                        'Illustrative equity % sold in R2 (20% typical). Used only to project post-R2 founder stake in the ownership waterfall.',
+                        true
+                      )}
                     </div>
                     <input id="r2-dil" class="tkm-input" type="number" step="any" min="0.1" max="89.9" inputmode="decimal" />
                     <small>% equity sold in R2 (20% std)</small>
@@ -382,134 +537,11 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
               </div>
             </details>
 
-            <section class="vc-card vc-config-card" aria-label="Inputs">
-              <div class="vc-card__head">
-                <p class="vc-eyebrow">Configuration: R1 &amp; R2</p>
-                <small class="vc-hint">R0 Last · R1 Now · R2 Next · <span id="unit-hint">Amounts in ₹ Cr</span></small>
-              </div>
-
-              <div class="vc-grid-4">
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="mrr">Current monthly revenue</label>
-                    ${renderInfoTip(
-                      'tip-mrr',
-                      'Current monthly revenue',
-                      'Current monthly run-rate revenue today. Editing this automatically updates annual revenue (x 12).'
-                    )}
-                  </div>
-                  <input id="mrr" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
-                  <small id="mrr-sub">₹ Cr/mo (synced with ARR ÷ 12)</small>
-                </div>
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="rev">Current annual revenue (ARR)</label>
-                    ${renderInfoTip(
-                      'tip-rev',
-                      'Current annual revenue (ARR)',
-                      'Annualised revenue run-rate today (monthly x 12). Sets your starting revenue base for R1 multiples and R2 growth.'
-                    )}
-                  </div>
-                  <input id="rev" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
-                  <small id="rev-sub">₹ Cr (monthly x 12)</small>
-                  <div class="vc-field-error" id="err-rev" hidden></div>
-                </div>
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="cash">R1 cash needed (burn plan)</label>
-                    ${renderInfoTip(
-                      'tip-cash',
-                      'R1 cash needed',
-                      'Cash your burn plan says you need to hit R2 milestones. Kept separate from R1 ask to reveal shortfalls or safety buffers.',
-                      true
-                    )}
-                  </div>
-                  <input id="cash" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
-                  <small id="cash-sub">₹ Cr needed for R2 (0 if unset)</small>
-                  <div class="vc-field-error" id="err-cash" hidden></div>
-                </div>
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="ask">R1 ask (raise)</label>
-                    ${renderInfoTip(
-                      'tip-ask',
-                      'R1 ask',
-                      'Capital you plan to raise in this round (R1). Together with R1 dilution, this directly sets your R1 valuation.',
-                      true
-                    )}
-                  </div>
-                  <input id="ask" class="tkm-input" type="number" step="any" min="0" inputmode="decimal" />
-                  <small id="ask-unit-sub">₹ Cr target raise in R1</small>
-                  <div class="vc-field-error" id="err-ask" hidden></div>
-                </div>
-              </div>
-
-              <div class="vc-grid-4">
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="dil">R1 dilution</label>
-                    ${renderInfoTip(
-                      'tip-dil',
-                      'R1 dilution',
-                      'Equity % sold to new investors in R1 (usually 20% to 25%). Lower dilution raises your implied valuation.'
-                    )}
-                  </div>
-                  <input id="dil" class="tkm-input" type="number" step="any" min="0.1" max="99.9" inputmode="decimal" />
-                  <small>% equity sold in R1 (20% to 25% std)</small>
-                  <div class="vc-field-error" id="err-dil" hidden></div>
-                </div>
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="months">Months to R2</label>
-                    ${renderInfoTip(
-                      'tip-months',
-                      'Months to R2',
-                      'Runway months from R1 close to your next priced round (R2). Standard seed staging is 15 to 18 months.'
-                    )}
-                  </div>
-                  <input id="months" class="tkm-input" type="number" step="1" min="1" max="120" inputmode="numeric" />
-                  <small>15 to 18 mo standard</small>
-                  <div class="vc-field-error" id="err-months" hidden></div>
-                </div>
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="step">R2 valuation step-up</label>
-                    ${renderInfoTip(
-                      'tip-step',
-                      'R2 valuation step-up',
-                      'Minimum valuation jump R1 investors expect between R1 post-money and R2 pre-money (R2 Pre = R1 Post x Step-up). Benchmark is 2x.',
-                      true
-                    )}
-                  </div>
-                  <input id="step" class="tkm-input" type="number" step="any" min="1" inputmode="decimal" />
-                  <small>R2 pre ÷ R1 post (2x std)</small>
-                  <div class="vc-field-error" id="err-step" hidden></div>
-                </div>
-                <div class="vc-field">
-                  <div class="vc-field__head">
-                    <label for="mult">R2 revenue multiple</label>
-                    <span class="vc-field__head-right">
-                      <span class="chip chip--primary">Assumption</span>
-                      ${renderInfoTip(
-                        'tip-mult',
-                        'R2 revenue multiple',
-                        'Expected valuation-to-ARR multiple in R2. Revenue multiples fit software and high-margin brands best. For hardware or asset-heavy models, use sector comparables.',
-                        true
-                      )}
-                    </span>
-                  </div>
-                  <input id="mult" class="tkm-input" type="number" step="any" min="0.1" inputmode="decimal" />
-                  <small>x ARR at next round (R2)</small>
-                  <div class="vc-field-error" id="err-mult" hidden></div>
-                </div>
-              </div>
-            </section>
-
             <details class="tkm-accordion" id="sector-benchmarks-drawer">
               <summary>
                 <span class="tkm-accordion__title">Indicative sector revenue multiples (R2)</span>
                 <span class="tkm-accordion__right">
-                  <span class="chip chip--primary">P25 / Median / P75</span>
+                  <span class="chip chip--primary">Click to set R2 multiple</span>
                   <span class="tkm-accordion__plus" aria-hidden="true"></span>
                 </span>
               </summary>
@@ -532,35 +564,9 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                 </div>
               </div>
             </details>
-
-            <details class="tkm-accordion" id="assumptions-drawer">
-              <summary>
-                <span class="tkm-accordion__title">How VCs do this math: 5 rules of thumb</span>
-                <span class="tkm-accordion__right">
-                  <span class="chip chip--rolling">5 rules</span>
-                  <span class="tkm-accordion__plus" aria-hidden="true"></span>
-                </span>
-              </summary>
-              <div class="tkm-accordion__body tkm-accordion__body--pad">
-                <ul class="vc-rules-list" aria-label="VC rules of thumb">
-                  ${rulesHtml}
-                </ul>
-              </div>
-            </details>
           </div>
 
-          <section class="vc-results-stack" aria-label="Results" aria-live="polite" id="results-panel">
-            <div class="vc-card vc-verdict-card" id="verdict-box">
-              <div class="vc-card__head">
-                <p class="vc-eyebrow">Verdict</p>
-                <span class="chip chip--open" id="vbadge">Reachable</span>
-              </div>
-              <h3 class="vc-verdict-title" id="vh"></h3>
-              <div class="vc-verdict-stats" id="verdict-stats"></div>
-              <ul class="vc-reasons" id="vreasons"></ul>
-              <p class="vc-verdict-foot" id="verdict-band-badge"></p>
-            </div>
-
+          <section class="vc-results-stack" aria-label="Detailed analysis" aria-live="polite" id="results-panel">
             <div class="vc-charts-grid">
               <div class="vc-card">
                 <div class="vc-card__head">
@@ -607,15 +613,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                   <div class="vc-field">
                     <div class="vc-field__head">
                       <label for="gs-growth">Target max growth (x)</label>
-                      <span class="vc-field__head-right">
-                        <span class="chip chip--primary">Assumption</span>
-                        ${renderInfoTip(
-                          'tip-gs-growth',
-                          'Target max growth',
-                          'Maximum R1-to-R2 revenue growth multiple you think is realistic. Goal-Seek solves the largest R1 ask that stays within this ceiling.',
-                          true
-                        )}
-                      </span>
+                      ${renderInfoTip(
+                        'tip-gs-growth',
+                        'Target max growth',
+                        'Maximum R1-to-R2 revenue growth multiple you think is realistic. Goal-Seek solves the largest R1 ask that stays within this ceiling.',
+                        true
+                      )}
                     </div>
                     <input id="gs-growth" class="tkm-input" type="number" step="0.1" min="0.5" max="50" inputmode="decimal" />
                     <small id="gs-growth-hint">Required CAGR: 108%/yr over 18 mo</small>
@@ -632,9 +635,9 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                     <small class="vc-hint">Click any cell to apply R1 ask &amp; dilution.</small>
                   </div>
                   <div class="vc-heatmap-legend" aria-label="Grid legend">
-                    <span class="chip chip--open">Reachable</span>
-                    <span class="chip chip--soon">Stretch</span>
-                    <span class="chip chip--closed">Stiff</span>
+                    <span class="chip chip--open">${escapeHtml(LABELS.bands.reachable)}</span>
+                    <span class="chip chip--soon">${escapeHtml(LABELS.bands.stretch)}</span>
+                    <span class="chip chip--closed">${escapeHtml(LABELS.bands.stiff)}</span>
                   </div>
                 </div>
                 <div id="heatmap-wrap" class="vc-heatmap-wrap"></div>
@@ -647,6 +650,37 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                 <div id="heatmap-trace-wrap"></div>
               </div>
             </div>
+
+            <details class="tkm-accordion" id="assumptions-drawer">
+              <summary>
+                <span class="tkm-accordion__title">How VCs do this math: 5 rules of thumb</span>
+                <span class="tkm-accordion__right">
+                  <span class="chip chip--rolling">${escapeHtml(LABELS.ruleOfThumbTag)}</span>
+                  <span class="tkm-accordion__plus" aria-hidden="true"></span>
+                </span>
+              </summary>
+              <div class="tkm-accordion__body tkm-accordion__body--pad">
+                <p class="vc-source-banner">${escapeHtml(LABELS.benchmarkSourceLine)}</p>
+                <ul class="vc-rules-list" aria-label="VC rules of thumb">
+                  ${rulesHtml}
+                </ul>
+              </div>
+            </details>
+
+            <details class="tkm-accordion" id="india-notes-drawer">
+              <summary>
+                <span class="tkm-accordion__title">${escapeHtml(LABELS.indiaNotesTitle)}</span>
+                <span class="tkm-accordion__right">
+                  <span class="chip chip--rolling">${escapeHtml(LABELS.indiaNotesTag)}</span>
+                  <span class="tkm-accordion__plus" aria-hidden="true"></span>
+                </span>
+              </summary>
+              <div class="tkm-accordion__body tkm-accordion__body--pad">
+                <ul class="vc-india-notes-list" aria-label="India valuation notes">
+                  ${indiaNotesHtml}
+                </ul>
+              </div>
+            </details>
           </section>
 
           <p class="vc-credit-footnote">
@@ -730,14 +764,16 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   const stepEl = root.querySelector<HTMLInputElement>('#step')!;
   const multEl = root.querySelector<HTMLInputElement>('#mult')!;
   const monthsEl = root.querySelector<HTMLInputElement>('#months')!;
-  const cashEl = root.querySelector<HTMLInputElement>('#cash')!;
+  const burnEl = root.querySelector<HTMLInputElement>('#burn')!;
   const esopEl = root.querySelector<HTMLInputElement>('#esop')!;
   const r2DilEl = root.querySelector<HTMLInputElement>('#r2-dil')!;
   const gsTargetEl = root.querySelector<HTMLSelectElement>('#gs-target')!;
   const gsGrowthEl = root.querySelector<HTMLInputElement>('#gs-growth')!;
+  const fxWrap = root.querySelector<HTMLElement>('#fx-wrap')!;
+  const fxEl = root.querySelector<HTMLInputElement>('#fx-rate')!;
   const presetsBox = root.querySelector<HTMLElement>('#presets')!;
   const presetNoteEl = root.querySelector<HTMLElement>('#pnote')!;
-  const activePresetChip = root.querySelector<HTMLElement>('#active-preset-chip')!;
+  const burnReadoutEl = root.querySelector<HTMLElement>('#burn-cash-readout')!;
   const settingsSummaryChip = root.querySelector<HTMLElement>('#settings-summary-chip')!;
   const unitSwitcher = root.querySelector<HTMLElement>('#unit-switcher')!;
   const downloadXlsxBtn = root.querySelector<HTMLButtonElement>('#download-xlsx-btn')!;
@@ -842,7 +878,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       state.input,
       state.unit,
       state.goalSeekTarget,
-      state.goalSeekGrowth
+      state.goalSeekGrowth,
+      state.fxInrPerUsd
     );
     downloadXlsxBtn.textContent = 'Downloaded!';
     setTimeout(() => {
@@ -879,30 +916,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     updateUI();
   });
 
-  // Unit switcher
+  // Unit switcher (canonical internal state in ₹ Cr is never mutated)
   unitSwitcher.querySelectorAll<HTMLButtonElement>('button[data-unit]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const nextUnit = btn.dataset.unit as CurrencyUnit;
       if (nextUnit === state.unit) return;
-      const prevUnit = state.unit;
       state.unit = nextUnit;
-
-      if (
-        (prevUnit === 'INR_CR' && nextUnit === 'INR_LAKH') ||
-        (prevUnit === 'INR_LAKH' && nextUnit === 'INR_CR')
-      ) {
-        state.input.ask = convertUnitScale(state.input.ask, prevUnit, nextUnit);
-        state.input.annualRevenue = convertUnitScale(
-          state.input.annualRevenue,
-          prevUnit,
-          nextUnit
-        );
-        state.input.priorRaise = convertUnitScale(state.input.priorRaise, prevUnit, nextUnit);
-        state.input.cashNeeded = convertUnitScale(state.input.cashNeeded, prevUnit, nextUnit);
-      } else {
-        state.activePresetId = null;
-      }
-
       populateInputsFromState();
       updateUI();
     });
@@ -917,7 +936,6 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     btn.dataset.id = p.id;
     btn.setAttribute('aria-pressed', state.activePresetId === p.id ? 'true' : 'false');
     btn.addEventListener('click', () => {
-      state.unit = p.unit;
       state.activePresetId = p.id;
       state.input = {
         ...p.input,
@@ -930,17 +948,16 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   });
 
   function populateInputsFromState(skipElement?: HTMLElement): void {
-    const { input } = state;
-    if (skipElement !== askEl) askEl.value = String(input.ask);
+    const { input, unit, fxInrPerUsd } = state;
+    const toDisp = (crVal: number): string => formatInputValue(fromCr(crVal, unit, fxInrPerUsd));
+
+    if (skipElement !== askEl) askEl.value = toDisp(input.ask);
     if (skipElement !== dilEl) dilEl.value = String(input.dilutionPct);
-    if (skipElement !== revEl) {
-      revEl.value = String(Number(input.annualRevenue.toFixed(4)));
+    if (skipElement !== revEl) revEl.value = toDisp(input.annualRevenue);
+    if (skipElement !== mrrEl) mrrEl.value = toDisp(input.annualRevenue / 12);
+    if (skipElement !== priorEl) {
+      priorEl.value = input.priorRaise > 0 ? toDisp(input.priorRaise) : '0';
     }
-    if (skipElement !== mrrEl) {
-      const monthly = input.annualRevenue / 12;
-      mrrEl.value = String(Number(monthly.toFixed(4)));
-    }
-    if (skipElement !== priorEl) priorEl.value = String(input.priorRaise);
     if (skipElement !== r0DilEl) {
       r0DilEl.value = input.priorDilutionPct !== undefined ? String(input.priorDilutionPct) : '';
     }
@@ -948,12 +965,18 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     if (skipElement !== stepEl) stepEl.value = String(input.stepUpMultiple);
     if (skipElement !== multEl) multEl.value = String(input.nextRoundMultiple);
     if (skipElement !== monthsEl) monthsEl.value = String(input.monthsToNextRound);
-    if (skipElement !== cashEl) cashEl.value = String(input.cashNeeded);
+    if (skipElement !== burnEl) {
+      const mBurn = input.monthlyBurn ?? 0;
+      burnEl.value = mBurn > 0 ? toDisp(mBurn) : '';
+    }
     if (skipElement !== esopEl) esopEl.value = String(input.esopTopUpPct);
     if (skipElement !== r2DilEl) {
       r2DilEl.value = String(
         input.nextRoundDilutionPct !== undefined ? input.nextRoundDilutionPct : 20
       );
+    }
+    if (skipElement !== fxEl) {
+      fxEl.value = String(Number(fxInrPerUsd.toFixed(4)));
     }
     if (skipElement !== gsTargetEl) gsTargetEl.value = state.goalSeekTarget;
     if (skipElement !== gsGrowthEl) gsGrowthEl.value = String(state.goalSeekGrowth);
@@ -967,21 +990,39 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   }
 
   function handleInputChange(sourceEl: HTMLElement): void {
+    if (sourceEl === fxEl) {
+      const fx = readNumericInput(fxEl);
+      if (Number.isFinite(fx) && fx > 0) {
+        fxEl.removeAttribute('aria-invalid');
+        state.fxInrPerUsd = fx;
+        populateInputsFromState(fxEl);
+        updateUI();
+      } else {
+        fxEl.setAttribute('aria-invalid', 'true');
+      }
+      return;
+    }
+
     if (sourceEl !== gsTargetEl && sourceEl !== gsGrowthEl) {
       state.activePresetId = null;
     }
 
+    const toCanonical = (dispVal: number): number =>
+      Number.isFinite(dispVal) ? toCr(dispVal, state.unit, state.fxInrPerUsd) : NaN;
+
     if (sourceEl === mrrEl) {
-      const mrr = readNumericInput(mrrEl);
-      state.input.annualRevenue = Number.isFinite(mrr) ? Number((mrr * 12).toFixed(6)) : NaN;
+      const mrrCr = toCanonical(readNumericInput(mrrEl));
+      state.input.annualRevenue = Number.isFinite(mrrCr) ? mrrCr * 12 : NaN;
       if (Number.isFinite(state.input.annualRevenue)) {
-        revEl.value = String(Number(state.input.annualRevenue.toFixed(4)));
+        revEl.value = formatInputValue(
+          fromCr(state.input.annualRevenue, state.unit, state.fxInrPerUsd)
+        );
       }
     } else if (sourceEl === revEl) {
-      const arr = readNumericInput(revEl);
-      state.input.annualRevenue = arr;
-      if (Number.isFinite(arr)) {
-        mrrEl.value = String(Number((arr / 12).toFixed(4)));
+      const arrCr = toCanonical(readNumericInput(revEl));
+      state.input.annualRevenue = arrCr;
+      if (Number.isFinite(arrCr)) {
+        mrrEl.value = formatInputValue(fromCr(arrCr / 12, state.unit, state.fxInrPerUsd));
       }
     } else if (sourceEl === gsTargetEl) {
       state.goalSeekTarget = gsTargetEl.value as GoalSeekTarget;
@@ -991,9 +1032,9 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         state.goalSeekGrowth = g;
       }
     } else {
-      state.input.ask = readNumericInput(askEl);
+      state.input.ask = toCanonical(readNumericInput(askEl));
       state.input.dilutionPct = readNumericInput(dilEl);
-      state.input.priorRaise = readNumericInput(priorEl);
+      state.input.priorRaise = toCanonical(readNumericInput(priorEl));
       const rawR0Dil = r0DilEl.value.trim();
       state.input.priorDilutionPct =
         rawR0Dil === '' ? undefined : readNumericInput(r0DilEl);
@@ -1001,7 +1042,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       state.input.stepUpMultiple = readNumericInput(stepEl);
       state.input.nextRoundMultiple = readNumericInput(multEl);
       state.input.monthsToNextRound = readNumericInput(monthsEl);
-      state.input.cashNeeded = readNumericInput(cashEl);
+      const rawBurn = burnEl.value.trim();
+      state.input.monthlyBurn =
+        rawBurn === '' ? 0 : toCanonical(readNumericInput(burnEl));
+      if (sourceEl === burnEl) {
+        state.input.cashNeeded = 0;
+      }
       state.input.esopTopUpPct = readNumericInput(esopEl);
       const rawR2Dil = r2DilEl.value.trim();
       state.input.nextRoundDilutionPct =
@@ -1021,9 +1067,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     stepEl,
     multEl,
     monthsEl,
-    cashEl,
+    burnEl,
     esopEl,
     r2DilEl,
+    fxEl,
     gsGrowthEl,
   ].forEach((el) => {
     el.addEventListener('input', () => handleInputChange(el));
@@ -1043,7 +1090,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       stepUpMultiple: { input: stepEl, errEl: root.querySelector('#err-step')! },
       nextRoundMultiple: { input: multEl, errEl: root.querySelector('#err-mult')! },
       monthsToNextRound: { input: monthsEl, errEl: root.querySelector('#err-months')! },
-      cashNeeded: { input: cashEl, errEl: root.querySelector('#err-cash')! },
+      monthlyBurn: { input: burnEl, errEl: root.querySelector('#err-burn')! },
+      cashNeeded: { input: burnEl, errEl: root.querySelector('#err-burn')! },
       esopTopUpPct: { input: esopEl, errEl: root.querySelector('#err-esop')! },
       nextRoundDilutionPct: { input: r2DilEl, errEl: root.querySelector('#err-r2-dil')! },
       esopAndDilution: { input: esopEl, errEl: root.querySelector('#err-esop')! },
@@ -1070,17 +1118,22 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   function updateUI(): void {
     syncStateToUrl(state);
 
-    const unitMeta = UNIT_METADATA[state.unit];
-    root.querySelector('#unit-hint')!.textContent = `Amounts in ${unitMeta.shortUnit}`;
+    const { unit, fxInrPerUsd } = state;
+    const unitMeta = UNIT_METADATA[unit];
+    fxWrap.hidden = unit !== 'USD_M';
+    root.querySelector('#unit-hint')!.textContent =
+      unit === 'USD_M'
+        ? `Amounts in USD ($M at ₹${Number(fxInrPerUsd.toFixed(2))}/USD)`
+        : `Amounts in ${unitMeta.shortUnit}`;
     root.querySelector('#ask-unit-sub')!.textContent = `${unitMeta.shortUnit} target raise in R1`;
     root.querySelector('#rev-sub')!.textContent = `${unitMeta.shortUnit} (monthly x 12)`;
     root.querySelector('#prior-sub')!.textContent = `${unitMeta.shortUnit} (0 if none)`;
-    root.querySelector('#cash-sub')!.textContent =
-      `${unitMeta.shortUnit} needed for R2 (0 if unset)`;
+    root.querySelector('#burn-sub')!.textContent =
+      `${unitMeta.shortUnit}/mo (0 or blank hides burn check)`;
 
     // Update unit switcher active button
     unitSwitcher.querySelectorAll<HTMLButtonElement>('button[data-unit]').forEach((btn) => {
-      btn.setAttribute('aria-pressed', btn.dataset.unit === state.unit ? 'true' : 'false');
+      btn.setAttribute('aria-pressed', btn.dataset.unit === unit ? 'true' : 'false');
     });
 
     // Update sector benchmark picker pressed states
@@ -1096,19 +1149,15 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     const waterfall = computeOwnershipWaterfall(state.input);
     const summaryParts: string[] = [];
     if (state.input.priorRaise > 0) {
-      summaryParts.push(`R0 ${formatMoney(state.input.priorRaise, state.unit)}`);
+      summaryParts.push(`R0 ${formatMoney(state.input.priorRaise, unit, undefined, fxInrPerUsd)}`);
     } else if (state.input.priorDilutionPct !== undefined && state.input.priorDilutionPct > 0) {
       summaryParts.push(`R0 ${formatPercent(state.input.priorDilutionPct, 1)} dil.`);
-    }
-    if (state.input.esopTopUpPct > 0) {
-      summaryParts.push(`ESOP ${formatPercent(state.input.esopTopUpPct, 1)}`);
     }
     if (waterfall.valid) {
       summaryParts.push(`Founders ${formatPercent(waterfall.founderPostR1Pct, 1)} R1`);
     }
     if (
       state.input.priorRaise > 0 ||
-      state.input.esopTopUpPct > 0 ||
       state.input.priorDilutionPct !== undefined ||
       (state.input.nextRoundDilutionPct !== undefined && state.input.nextRoundDilutionPct !== 20)
     ) {
@@ -1133,12 +1182,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     // Update dynamic monthly helper caption
     const mrrSub = root.querySelector('#mrr-sub')!;
     if (Number.isFinite(state.input.annualRevenue) && state.input.annualRevenue > 0) {
-      mrrSub.textContent = `${formatMonthlyMoney(state.input.annualRevenue / 12, state.unit)} (synced)`;
+      mrrSub.textContent = `${formatMonthlyMoney(state.input.annualRevenue / 12, unit, fxInrPerUsd)} (synced)`;
     } else {
       mrrSub.textContent = `${unitMeta.shortUnit}/mo (synced with ARR ÷ 12)`;
     }
 
-    // Update preset buttons active state, chip & note
+    // Update preset buttons active state & note
     presetsBox.querySelectorAll('button').forEach((btn) => {
       const isMatch = btn.dataset.id === state.activePresetId;
       btn.setAttribute('aria-pressed', isMatch ? 'true' : 'false');
@@ -1148,24 +1197,32 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     if (activePreset) {
       presetNoteEl.hidden = false;
       presetNoteEl.textContent = activePreset.description;
-      activePresetChip.className = 'chip chip--primary';
-      activePresetChip.textContent = activePreset.shortLabel;
     } else {
       presetNoteEl.hidden = true;
-      activePresetChip.className = 'chip chip--rolling';
-      activePresetChip.textContent = 'Optional';
     }
 
-    const output = evaluateAsk(state.input, state.unit);
+    const output = evaluateAsk(state.input, unit, fxInrPerUsd);
     renderValidationErrors(output);
 
     const { metrics, effectiveVerdictBands } = output;
-
-    // Render Verdict
     const safeMonths = Math.max(
       1,
       Number.isFinite(state.input.monthsToNextRound) ? state.input.monthsToNextRound : 18
     );
+
+    const monthlyBurnCr = state.input.monthlyBurn ?? 0;
+    const effectiveBurnNeedCr =
+      monthlyBurnCr > 0 ? monthlyBurnCr * safeMonths : state.input.cashNeeded;
+
+    if (monthlyBurnCr > 0 && Number.isFinite(monthlyBurnCr)) {
+      burnReadoutEl.innerHTML = `Cash need = <strong>${escapeHtml(formatMoney(monthlyBurnCr * safeMonths, unit, undefined, fxInrPerUsd))}</strong> (${escapeHtml(formatMonthlyMoney(monthlyBurnCr, unit, fxInrPerUsd))} × ${escapeHtml(formatNumber(safeMonths, 0))} months to R2)`;
+    } else if (state.input.cashNeeded > 0) {
+      burnReadoutEl.innerHTML = `Legacy burn plan cash need = <strong>${escapeHtml(formatMoney(state.input.cashNeeded, unit, undefined, fxInrPerUsd))}</strong>`;
+    } else {
+      burnReadoutEl.textContent = 'Optional. Leave blank to hide burn check.';
+    }
+
+    // Render Pricing check (Results First)
     const gsCagrPct = (Math.pow(state.goalSeekGrowth, 12 / safeMonths) - 1) * 100;
     root.querySelector('#gs-growth-hint')!.textContent =
       `Required CAGR: ${formatPercent(gsCagrPct, 0)}/yr over ${formatNumber(safeMonths, 0)} mo`;
@@ -1173,6 +1230,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     const vbadge = root.querySelector<HTMLElement>('#vbadge')!;
     const vh = root.querySelector<HTMLElement>('#vh')!;
     const verdictStatsEl = root.querySelector<HTMLElement>('#verdict-stats')!;
+    const verdictEsopNoteEl = root.querySelector<HTMLElement>('#verdict-esop-note')!;
+    const verdictPreRevCalloutEl = root.querySelector<HTMLElement>('#verdict-prerev-callout')!;
     const vreasons = root.querySelector<HTMLElement>('#vreasons')!;
     const verdictFootEl = root.querySelector<HTMLElement>('#verdict-band-badge')!;
 
@@ -1184,39 +1243,91 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       output.validation.valid &&
       state.input.annualRevenue > 0 &&
       metrics.requiredGrowthMultiple.value !== null
-        ? `${formatMultiple(metrics.requiredGrowthMultiple.value, 1)} revenue growth needed in ${formatNumber(safeMonths, 0)} months`
+        ? LABELS.headline(
+            formatMultiple(metrics.requiredGrowthMultiple.value, 1),
+            formatNumber(safeMonths, 0)
+          )
         : output.verdict.headline;
 
     if (output.validation.valid) {
       const cagrPct = metrics.impliedCagrPct.value;
       const cmgrPct = metrics.impliedCmgrPct.value;
       const postMultV = metrics.impliedPostRevenueMultiple.value;
-      const r1Sub =
+      const effPreVal = metrics.effectivePreMoneyAfterEsop.value ?? 0;
+      const effPreMult =
+        state.input.annualRevenue > 0 ? effPreVal / state.input.annualRevenue : null;
+      const esopPoolVal =
+        (metrics.impliedPostMoney.value ?? 0) * (Math.max(0, state.input.esopTopUpPct) / 100);
+      const r1PostSub =
         postMultV !== null
           ? `${metrics.impliedPreMoney.formattedValue} pre · ${formatMultiple(postMultV, 1)}`
           : `${metrics.impliedPreMoney.formattedValue} pre`;
+      const effPreSub =
+        state.input.esopTopUpPct > 0
+          ? effPreMult !== null
+            ? `${formatMultiple(effPreMult, 1)} ARR (after ${formatPercent(state.input.esopTopUpPct, 1)} ESOP)`
+            : `After ${formatPercent(state.input.esopTopUpPct, 1)} ESOP`
+          : effPreMult !== null
+            ? `${formatMultiple(effPreMult, 1)} ARR (no R1 ESOP)`
+            : 'No R1 ESOP set';
+      const founderStakeValue = waterfall.valid
+        ? formatPercent(waterfall.founderPostR1Pct, 1)
+        : formatPercent(Math.max(0, 100 - state.input.dilutionPct), 1);
+      const founderStakeSub =
+        state.input.esopTopUpPct > 0
+          ? `Includes ${formatPercent(state.input.esopTopUpPct, 1)} ESOP carve-out`
+          : `${formatPercent(state.input.dilutionPct, 1)} R1 investor share`;
 
       verdictStatsEl.hidden = false;
       verdictStatsEl.innerHTML = `
         <div class="vc-verdict-stat">
           <span class="sl">Required CAGR</span>
-          <span class="sv">${escapeHtml(cagrPct !== null ? `${formatPercent(cagrPct, 0)}/yr` : 'Add ARR')}</span>
-          <span class="ss">${escapeHtml(cmgrPct !== null ? `${formatPercent(cmgrPct, 1)}/mo` : 'needed for CAGR')}</span>
+          <span class="sv">${escapeHtml(cagrPct !== null ? `${formatPercent(cagrPct, 0)}/yr` : 'Pre-revenue')}</span>
+          <span class="ss">${escapeHtml(cmgrPct !== null ? `${formatPercent(cmgrPct, 1)}/mo · R2 ${metrics.requiredNextAnnualRevenue.formattedValue}` : 'milestone-priced stage')}</span>
         </div>
         <div class="vc-verdict-stat">
-          <span class="sl">R1 valuation</span>
-          <span class="sv">${escapeHtml(`${metrics.impliedPostMoney.formattedValue} post`)}</span>
-          <span class="ss">${escapeHtml(r1Sub)}</span>
+          <span class="sl">R1 post-money</span>
+          <span class="sv">${escapeHtml(metrics.impliedPostMoney.formattedValue)}</span>
+          <span class="ss">${escapeHtml(r1PostSub)}</span>
         </div>
         <div class="vc-verdict-stat">
-          <span class="sl">R2 target</span>
-          <span class="sv">${escapeHtml(`${metrics.nextRoundPreMoney.formattedValue} pre`)}</span>
-          <span class="ss">${escapeHtml(`${metrics.requiredNextAnnualRevenue.formattedValue} ARR at ${formatMultiple(state.input.nextRoundMultiple, 1)}`)}</span>
+          <span class="sl">Effective pre-money</span>
+          <span class="sv">${escapeHtml(metrics.effectivePreMoneyAfterEsop.formattedValue)}</span>
+          <span class="ss">${escapeHtml(effPreSub)}</span>
+        </div>
+        <div class="vc-verdict-stat">
+          <span class="sl">Founder stake (Post R1)</span>
+          <span class="sv">${escapeHtml(founderStakeValue)}</span>
+          <span class="ss">${escapeHtml(founderStakeSub)}</span>
         </div>
       `;
+
+      verdictEsopNoteEl.hidden = false;
+      verdictEsopNoteEl.textContent =
+        state.input.esopTopUpPct > 0
+          ? LABELS.esopNoteActive(
+              formatPercent(state.input.esopTopUpPct, 1),
+              formatMoney(esopPoolVal, unit, undefined, fxInrPerUsd),
+              metrics.impliedPreMoney.formattedValue,
+              metrics.effectivePreMoneyAfterEsop.formattedValue,
+              formatPercent(state.input.dilutionPct, 1)
+            )
+          : LABELS.esopNoteDefault;
+
+      if (state.input.annualRevenue <= 0) {
+        verdictPreRevCalloutEl.hidden = false;
+        verdictPreRevCalloutEl.textContent = LABELS.preRevenueMessage;
+      } else {
+        verdictPreRevCalloutEl.hidden = true;
+        verdictPreRevCalloutEl.textContent = '';
+      }
     } else {
       verdictStatsEl.hidden = true;
       verdictStatsEl.innerHTML = '';
+      verdictEsopNoteEl.hidden = true;
+      verdictEsopNoteEl.textContent = '';
+      verdictPreRevCalloutEl.hidden = true;
+      verdictPreRevCalloutEl.textContent = '';
     }
 
     const reasonTag = (id: string): string => {
@@ -1234,7 +1345,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     };
 
     const reasonsToShow = output.verdict.reasons.filter(
-      (r) => !(r.id === 'valuation_signal' && state.input.annualRevenue > 0)
+      (r) =>
+        !(r.id === 'valuation_signal' && state.input.annualRevenue > 0) &&
+        r.id !== 'missing_revenue' &&
+        r.id !== 'esop_impact'
     );
 
     vreasons.innerHTML = reasonsToShow
@@ -1257,12 +1371,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       })
       .join('');
 
-    verdictFootEl.textContent = `Thresholds: Reachable ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr CAGR · Stretch ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr CAGR`;
+    verdictFootEl.textContent = `Thresholds: ${LABELS.bands.reachable} ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr CAGR · ${LABELS.bands.stretch} ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr CAGR`;
 
     // Render Visual Charts
     const valChartEl = root.querySelector<HTMLElement>('#valuation-chart')!;
     const valTraceWrap = root.querySelector<HTMLElement>('#valuation-trace-wrap')!;
-    valChartEl.innerHTML = renderValuationLadderSvg(output);
+    valChartEl.innerHTML = renderValuationLadderSvg(output, fxInrPerUsd);
 
     const chainRows: Array<{ label: string; value: string; calc: string }> = [
       {
@@ -1281,7 +1395,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     chainRows.push(
       {
         label: 'R1 ask (raise)',
-        value: formatMoney(state.input.ask, state.unit),
+        value: formatMoney(state.input.ask, unit, undefined, fxInrPerUsd),
         calc: `${formatPercent(state.input.dilutionPct, 1)} R1 dilution`,
       },
       {
@@ -1330,9 +1444,9 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     const revChartEl = root.querySelector<HTMLElement>('#revenue-chart')!;
     const burnBarEl = root.querySelector<HTMLElement>('#burn-bar')!;
     const revTraceWrap = root.querySelector<HTMLElement>('#revenue-trace-wrap')!;
-    revChartEl.innerHTML = renderRevenueBridgeSvg(output);
+    revChartEl.innerHTML = renderRevenueBridgeSvg(output, fxInrPerUsd);
 
-    const burnMarkup = renderBurnComparisonBar(output);
+    const burnMarkup = renderBurnComparisonBar(output, fxInrPerUsd);
     if (burnMarkup) {
       burnBarEl.hidden = false;
       burnBarEl.innerHTML = burnMarkup;
@@ -1346,18 +1460,18 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       `${metrics.requiredNextAnnualRevenue.formula} · ${metrics.requiredGrowthMultiple.formula}`,
       `${metrics.requiredNextAnnualRevenue.calculation} | Growth: ${metrics.requiredGrowthMultiple.calculation} (${formatNumber(state.input.monthsToNextRound, 0)} mo)`,
       true,
-      `Uses ${formatMultiple(state.input.nextRoundMultiple, 1)} R2 revenue multiple`,
+      LABELS.ruleOfThumbTag,
       openTraces
     );
 
-    // Render 3 Non-Redundant Signal Cards (Required CAGR, Valuation Multiple Shift, Burn/R0)
+    // Render Signal Cards (Required CAGR, Valuation Multiple Shift, and optional Burn/R0)
     const signalsEl = root.querySelector<HTMLElement>('#signals-strip')!;
 
     // Card 1: Required CAGR (Visualized)
     const cagrVal = metrics.impliedCagrPct.value;
     const cmgrVal = metrics.impliedCmgrPct.value;
-    let cagrHero = 'Enter revenue';
-    let cagrSub = 'add current ARR to compute CAGR';
+    let cagrHero = 'Pre-revenue';
+    let cagrSub = 'DeepTech Round Planner (coming soon)';
     if (cagrVal !== null && cmgrVal !== null) {
       cagrHero = `${formatPercent(cagrVal, 0)}/yr`;
       cagrSub = `${formatPercent(cmgrVal, 1)}/mo compounded for ${formatNumber(safeMonths, 0)} mo`;
@@ -1366,7 +1480,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     // Card 2: Valuation Multiple Shift (Visualized)
     const preMult = metrics.impliedPreRevenueMultiple.value;
     const postMult = metrics.impliedPostRevenueMultiple.value;
-    let multHero = 'Enter revenue';
+    let multHero = 'Pre-revenue';
     let multSub = `vs. ${formatMultiple(state.input.nextRoundMultiple, 1)} R2 multiple`;
     if (preMult !== null && postMult !== null) {
       multHero = `${formatMultiple(preMult, 1)} pre · ${formatMultiple(postMult, 1)} post`;
@@ -1378,14 +1492,16 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       }
     }
 
-    // Card 3: Burn Plan & R0 Check
+    // Card 3: Burn Plan & R0 Check (hidden when both monthly burn and R0 raise are empty/0)
     const priorMult = metrics.askToPriorRaiseMultiple.value;
     const priorExtra =
       state.input.priorRaise > 0 && priorMult !== null
         ? `R0 raise: ${formatMultiple(priorMult, 1)} (${state.input.priorRaiseWasPriced ? '3x to 4x priced band' : 'unpriced'})`
         : null;
+    const showBurnOrR0Card = effectiveBurnNeedCr > 0 || state.input.priorRaise > 0;
+    signalsEl.classList.toggle('vc-signals--two', !showBurnOrR0Card);
 
-    signalsEl.innerHTML = [
+    const signalCardsHtml = [
       renderSignalCard(
         'impliedCagrPct',
         'Required CAGR',
@@ -1420,27 +1536,40 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         ),
         renderMultipleShiftSvg(output)
       ),
-      renderSignalCard(
-        'fundingGap',
-        'Burn plan & R0 check',
-        metrics.fundingGap.formattedValue,
-        metrics.fundingGap.subtitle,
-        priorExtra,
-        null,
-        renderTraceDetails(
-          'tile_fundingGap',
-          metrics.fundingGap.formula,
-          metrics.fundingGap.calculation,
-          false,
-          metrics.fundingGap.assumptionOrigin,
-          openTraces
+    ];
+    if (showBurnOrR0Card) {
+      signalCardsHtml.push(
+        renderSignalCard(
+          'fundingGap',
+          effectiveBurnNeedCr > 0 ? 'Burn plan & R0 check' : 'R0 raise check',
+          effectiveBurnNeedCr > 0
+            ? metrics.fundingGap.formattedValue
+            : metrics.askToPriorRaiseMultiple.formattedValue,
+          effectiveBurnNeedCr > 0
+            ? metrics.fundingGap.subtitle
+            : metrics.askToPriorRaiseMultiple.subtitle,
+          effectiveBurnNeedCr > 0 ? priorExtra : null,
+          null,
+          renderTraceDetails(
+            'tile_fundingGap',
+            effectiveBurnNeedCr > 0
+              ? metrics.fundingGap.formula
+              : metrics.askToPriorRaiseMultiple.formula,
+            effectiveBurnNeedCr > 0
+              ? metrics.fundingGap.calculation
+              : metrics.askToPriorRaiseMultiple.calculation,
+            false,
+            metrics.fundingGap.assumptionOrigin,
+            openTraces
+          )
         )
-      ),
-    ].join('');
+      );
+    }
+    signalsEl.innerHTML = signalCardsHtml.join('');
 
     // Render Feasible Ask Bar & Goal-Seek Section
     const feasibleBarEl = root.querySelector<HTMLElement>('#feasible-bar')!;
-    feasibleBarEl.innerHTML = renderFeasibleAskBarSvg(output);
+    feasibleBarEl.innerHTML = renderFeasibleAskBarSvg(output, fxInrPerUsd);
 
     const bandPillsEl = root.querySelector<HTMLElement>('#band-pills')!;
     const gsOutputEl = root.querySelector<HTMLElement>('#gs-output')!;
@@ -1448,7 +1577,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       state.input,
       state.goalSeekTarget,
       state.goalSeekGrowth,
-      state.unit
+      unit,
+      fxInrPerUsd
     );
 
     const pills: string[] = [];
@@ -1457,18 +1587,18 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         <div class="vc-band-pill" data-band="reachable">
           <div class="vc-band-pill__head">
             <span class="bl">Max ask (≤${escapeHtml(formatMultiple(effectiveVerdictBands.reachableMax, 1))} · ${escapeHtml(formatPercent(effectiveVerdictBands.reachableCagrPct, 0))}/yr)</span>
-            <span class="chip chip--open">Reachable</span>
+            <span class="chip chip--open">${escapeHtml(LABELS.bands.reachable)}</span>
           </div>
-          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.reachableAsk, state.unit))}</span>
+          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.reachableAsk, unit, undefined, fxInrPerUsd))}</span>
         </div>
       `);
       pills.push(`
         <div class="vc-band-pill" data-band="stretch">
           <div class="vc-band-pill__head">
             <span class="bl">Max ask (≤${escapeHtml(formatMultiple(effectiveVerdictBands.stretchMax, 1))} · ${escapeHtml(formatPercent(effectiveVerdictBands.stretchCagrPct, 0))}/yr)</span>
-            <span class="chip chip--soon">Stretch</span>
+            <span class="chip chip--soon">${escapeHtml(LABELS.bands.stretch)}</span>
           </div>
-          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.stretchAsk, state.unit))}</span>
+          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.stretchAsk, unit, undefined, fxInrPerUsd))}</span>
         </div>
       `);
     }
@@ -1479,7 +1609,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
             <span class="bl">Priced R0 band</span>
             <span class="chip chip--primary">3x to 4x</span>
           </div>
-          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.priorRaiseBand[0], state.unit))} to ${escapeHtml(formatMoney(output.feasibleAskBand.priorRaiseBand[1], state.unit))}</span>
+          <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.priorRaiseBand[0], unit, undefined, fxInrPerUsd))} to ${escapeHtml(formatMoney(output.feasibleAskBand.priorRaiseBand[1], unit, undefined, fxInrPerUsd))}</span>
         </div>
       `);
     }
@@ -1522,7 +1652,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     if (applyBtn && seek.solvedValue !== null) {
       applyBtn.addEventListener('click', () => {
         state.activePresetId = null;
-        const val = Number(seek.solvedValue!.toFixed(2));
+        const val = Number(seek.solvedValue!.toFixed(4));
         if (state.goalSeekTarget === 'max_ask') {
           state.input.ask = val;
         } else if (state.goalSeekTarget === 'required_revenue') {
@@ -1574,10 +1704,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
           return `
             <tr${rowClass}>
               <td title="${escapeHtml(row.note)}">${escapeHtml(dilLabel)}</td>
-              <td>${escapeHtml(formatMoney(row.postMoney, state.unit))}</td>
-              <td>${escapeHtml(formatMoney(row.preMoney, state.unit))}</td>
+              <td>${escapeHtml(formatMoney(row.postMoney, unit, undefined, fxInrPerUsd))}</td>
+              <td>${escapeHtml(formatMoney(row.preMoney, unit, undefined, fxInrPerUsd))}</td>
               <td>${escapeHtml(multCell)}</td>
-              <td>${escapeHtml(formatMoney(row.nextPreMoney, state.unit))}</td>
+              <td>${escapeHtml(formatMoney(row.nextPreMoney, unit, undefined, fxInrPerUsd))}</td>
               <td>${escapeHtml(growthCell)}</td>
             </tr>
           `;
@@ -1591,7 +1721,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     const heatmap = computeAskDilutionHeatmap(state.input);
     if (!heatmap.available) {
       heatmapWrap.innerHTML =
-        '<p class="vc-hm-empty">Enter positive current revenue and valid R1/R2 assumptions above to view the Ask vs. Dilution sensitivity grid.</p>';
+        '<p class="vc-hm-empty">Pre-revenue: enter positive ARR above to render the Ask vs. Dilution sensitivity grid (milestone-priced DeepTech tool coming soon).</p>';
       heatmapTraceWrap.innerHTML = '';
     } else {
       const hmColGroup = `<colgroup><col class="vc-hm-col-ask" />${heatmap.dilutions.map(() => '<col class="vc-hm-col-dil" />').join('')}</colgroup>`;
@@ -1604,7 +1734,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
 
       const hmRowsHtml = heatmap.rows
         .map((row) => {
-          const askLabel = formatMoney(row.ask, state.unit);
+          const askLabel = formatMoney(row.ask, unit, undefined, fxInrPerUsd);
           const rowHead = `<th scope="row" class="vc-hm-row-head${row.isCurrentAsk ? ' is-current-row' : ''}"><span>${escapeHtml(askLabel)}</span>${row.isCurrentAsk ? '<span class="vc-hm-now">Current</span>' : ''}</th>`;
           const cellsHtml = row.cells
             .map((cell) => {
@@ -1612,8 +1742,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
               if (cell.isCurrent) clsParts.push('vc-hm-cell--current');
               const cagrPctOnly = formatPercent(cell.impliedCagrPct, 0);
               const growthOnly = formatMultiple(cell.requiredGrowthMultiple, 1);
-              const postMoneyText = formatMoney(cell.postMoney, state.unit);
-              const ariaLabel = `Set R1 ask to ${formatMoney(cell.ask, state.unit)} at ${formatPercent(cell.dilutionPct, 1)} dilution: ${cagrPctOnly}/yr CAGR, ${cell.level}`;
+              const postMoneyText = formatMoney(cell.postMoney, unit, undefined, fxInrPerUsd);
+              const ariaLabel = `Set R1 ask to ${formatMoney(cell.ask, unit, undefined, fxInrPerUsd)} at ${formatPercent(cell.dilutionPct, 1)} dilution: ${cagrPctOnly}/yr CAGR, ${LABELS.bands[cell.level]}`;
               return `
                 <td>
                   <button
@@ -1655,12 +1785,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         'Required R2 ARR = ((Ask ÷ Dilution) × R2 Step-Up) ÷ R2 Multiple · CAGR = ((Required R2 ARR ÷ Current ARR) ^ (12 ÷ Months)) − 1',
         `Evaluated ${heatmap.rows.length} ask levels against ${heatmap.dilutions.map((d) => formatPercent(d, 1)).join(', ')} dilution over ${formatNumber(safeMonths, 0)} months.`,
         false,
-        `Reachable ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr · Stretch ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`,
+        `${LABELS.bands.reachable} ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr · ${LABELS.bands.stretch} ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`,
         openTraces
       );
     }
 
-    // Render Founder Ownership Waterfall inside R0 & ESOP drawer
+    // Render Founder Ownership Waterfall inside R0 & waterfall drawer
     const wfEl = root.querySelector<HTMLElement>('#ownership-waterfall')!;
     const wfSummaryEl = root.querySelector<HTMLElement>('#ownership-summary')!;
     const capTableEl = root.querySelector<HTMLElement>('#ownership-captable')!;
@@ -1700,9 +1830,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         'Founder Post-R1 = (100% − R0 %) × (1 − (ESOP % + R1 %) ÷ 100) · Founder Post-R2 = Founder Post-R1 × (1 − R2 % ÷ 100)',
         `Pre-R1 ${formatPercent(waterfall.founderPreR1Pct, 1)} -> after ${formatPercent(waterfall.esopTopUpPct, 1)} ESOP and ${formatPercent(waterfall.r1DilutionPct, 1)} R1 = ${formatPercent(waterfall.founderPostR1Pct, 1)} -> after ${formatPercent(waterfall.r2DilutionPct, 1)} illustrative R2 = ${formatPercent(waterfall.founderPostR2Pct, 1)}`,
         waterfall.r0DilutionIsAssumed || state.input.nextRoundDilutionPct === undefined,
-        waterfall.r0DilutionIsAssumed
-          ? 'Tool Assumption (15% R0 est. + illustrative R2 %)'
-          : 'Tool Assumption (illustrative R2 dilution %)',
+        LABELS.ruleOfThumbTag,
         openTraces
       );
     }

@@ -1,5 +1,7 @@
 import type { CurrencyUnit } from './types';
 
+export const DEFAULT_FX_INR_PER_USD = 85;
+
 export interface UnitMetadata {
   id: CurrencyUnit;
   label: string;
@@ -7,7 +9,6 @@ export interface UnitMetadata {
   symbol: string;
   suffix: string;
   locale: string;
-  /** Factor relative to ₹ Cr when converting preset/input values across Indian units, or 1 for manual unit switch */
   indianSubUnitLabel: string;
 }
 
@@ -41,6 +42,45 @@ export const UNIT_METADATA: Record<CurrencyUnit, UnitMetadata> = {
   },
 };
 
+function sanitizeFx(fxInrPerUsd: number): number {
+  return Number.isFinite(fxInrPerUsd) && fxInrPerUsd > 0 ? fxInrPerUsd : DEFAULT_FX_INR_PER_USD;
+}
+
+/**
+ * Converts a canonical ₹ Cr monetary value to the selected display unit.
+ * 1 Cr INR = 100 Lakh INR = (10 / fxInrPerUsd) USD Millions.
+ */
+export function fromCr(
+  crValue: number,
+  unit: CurrencyUnit,
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
+): number {
+  if (!Number.isFinite(crValue)) return crValue;
+  if (unit === 'INR_CR') return crValue;
+  if (unit === 'INR_LAKH') return crValue * 100;
+  return (crValue * 10) / sanitizeFx(fxInrPerUsd);
+}
+
+/**
+ * Converts a user-entered value in the selected display unit back to canonical ₹ Cr.
+ */
+export function toCr(
+  displayValue: number,
+  unit: CurrencyUnit,
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
+): number {
+  if (!Number.isFinite(displayValue)) return displayValue;
+  if (unit === 'INR_CR') return displayValue;
+  if (unit === 'INR_LAKH') return displayValue / 100;
+  return (displayValue * sanitizeFx(fxInrPerUsd)) / 10;
+}
+
+export function formatInputValue(displayValue: number): string {
+  if (!Number.isFinite(displayValue)) return '';
+  if (Math.abs(displayValue) < 1e-9) return '0';
+  return String(Number(displayValue.toFixed(4)));
+}
+
 export function formatNumber(
   value: number | null | undefined,
   maxDecimals = 1,
@@ -56,16 +96,21 @@ export function formatNumber(
   });
 }
 
+/**
+ * Formats a canonical ₹ Cr value in the target currency unit.
+ */
 export function formatMoney(
-  value: number | null | undefined,
+  crValue: number | null | undefined,
   unit: CurrencyUnit = 'INR_CR',
-  maxDecimals?: number
+  maxDecimals?: number,
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
 ): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
+  if (crValue === null || crValue === undefined || !Number.isFinite(crValue)) {
     return '-';
   }
+  const displayValue = fromCr(crValue, unit, fxInrPerUsd);
   const meta = UNIT_METADATA[unit];
-  const absVal = Math.abs(value);
+  const absVal = Math.abs(displayValue);
   const decimals =
     maxDecimals !== undefined
       ? maxDecimals
@@ -74,40 +119,42 @@ export function formatMoney(
         : absVal < 1 && absVal > 0
           ? 2
           : 1;
-  const sign = value < 0 ? '-' : '';
+  const sign = displayValue < 0 ? '-' : '';
   const formatted = formatNumber(absVal, decimals, meta.locale);
   return `${sign}${meta.symbol}${formatted}${meta.suffix}`;
 }
 
 /**
- * Formats monthly revenue concisely: in INR_CR mode, ₹0.75 Cr/mo is also "₹75 Lakh/mo"
+ * Formats a canonical monthly ₹ Cr/mo value in the target currency unit.
  */
 export function formatMonthlyMoney(
-  monthlyValueInUnit: number | null | undefined,
-  unit: CurrencyUnit = 'INR_CR'
+  monthlyCrValue: number | null | undefined,
+  unit: CurrencyUnit = 'INR_CR',
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
 ): string {
   if (
-    monthlyValueInUnit === null ||
-    monthlyValueInUnit === undefined ||
-    !Number.isFinite(monthlyValueInUnit)
+    monthlyCrValue === null ||
+    monthlyCrValue === undefined ||
+    !Number.isFinite(monthlyCrValue)
   ) {
     return '-';
   }
+  const monthlyInUnit = fromCr(monthlyCrValue, unit, fxInrPerUsd);
   if (unit === 'INR_CR') {
-    if (monthlyValueInUnit > 0 && monthlyValueInUnit < 1) {
-      const lakhs = monthlyValueInUnit * 100;
-      return `₹${formatNumber(lakhs, 1, 'en-IN')} Lakh/mo (₹${formatNumber(monthlyValueInUnit, 2, 'en-IN')} Cr/mo)`;
+    if (monthlyInUnit > 0 && monthlyInUnit < 1) {
+      const lakhs = monthlyInUnit * 100;
+      return `₹${formatNumber(lakhs, 1, 'en-IN')} Lakh/mo (₹${formatNumber(monthlyInUnit, 2, 'en-IN')} Cr/mo)`;
     }
-    return `${formatMoney(monthlyValueInUnit, 'INR_CR', 2)}/mo`;
+    return `${formatMoney(monthlyCrValue, 'INR_CR', 2, fxInrPerUsd)}/mo`;
   }
   if (unit === 'USD_M') {
-    if (monthlyValueInUnit > 0 && monthlyValueInUnit < 1) {
-      const thousands = monthlyValueInUnit * 1000;
-      return `$${formatNumber(thousands, 0, 'en-US')}K/mo ($${formatNumber(monthlyValueInUnit, 2, 'en-US')}M/mo)`;
+    if (monthlyInUnit > 0 && monthlyInUnit < 1) {
+      const thousands = monthlyInUnit * 1000;
+      return `$${formatNumber(thousands, 0, 'en-US')}K/mo ($${formatNumber(monthlyInUnit, 2, 'en-US')}M/mo)`;
     }
-    return `${formatMoney(monthlyValueInUnit, 'USD_M', 2)}/mo`;
+    return `${formatMoney(monthlyCrValue, 'USD_M', 2, fxInrPerUsd)}/mo`;
   }
-  return `${formatMoney(monthlyValueInUnit, unit, 1)}/mo`;
+  return `${formatMoney(monthlyCrValue, unit, 1, fxInrPerUsd)}/mo`;
 }
 
 export function formatMultiple(value: number | null | undefined, decimals = 1): string {
@@ -125,16 +172,14 @@ export function formatPercent(value: number | null | undefined, decimals = 0): s
 }
 
 /**
- * Converts a monetary amount between INR_CR and INR_LAKH if switching between Indian scale units,
- * or keeps numerical magnitude when switching to USD_M (with optional explicit scale factor).
+ * Losslessly converts a monetary amount between any two display units via canonical ₹ Cr.
  */
 export function convertUnitScale(
   value: number,
   fromUnit: CurrencyUnit,
-  toUnit: CurrencyUnit
+  toUnit: CurrencyUnit,
+  fxInrPerUsd = DEFAULT_FX_INR_PER_USD
 ): number {
   if (fromUnit === toUnit) return value;
-  if (fromUnit === 'INR_CR' && toUnit === 'INR_LAKH') return Number((value * 100).toFixed(4));
-  if (fromUnit === 'INR_LAKH' && toUnit === 'INR_CR') return Number((value / 100).toFixed(4));
-  return value;
+  return fromCr(toCr(value, fromUnit, fxInrPerUsd), toUnit, fxInrPerUsd);
 }

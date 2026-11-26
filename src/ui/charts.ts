@@ -1,9 +1,11 @@
 import {
+  DEFAULT_FX_INR_PER_USD,
   computeOwnershipWaterfall,
   formatMoney,
   formatMultiple,
   formatNumber,
   formatPercent,
+  fromCr,
   type CheckOutput,
   type CurrencyUnit,
 } from '../engine';
@@ -17,33 +19,48 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function compactMonthlyLabel(monthlyVal: number, unit: CurrencyUnit): string {
-  if (!Number.isFinite(monthlyVal) || monthlyVal <= 0) return '₹0/mo';
-  if (unit === 'INR_CR' && monthlyVal < 1) {
-    const lakhs = monthlyVal * 100;
+function compactMonthlyLabel(
+  monthlyCrVal: number,
+  unit: CurrencyUnit,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
+  const disp = fromCr(monthlyCrVal, unit, fxInrPerUsd);
+  if (!Number.isFinite(disp) || disp <= 0) {
+    return unit === 'USD_M' ? '$0/mo' : '₹0/mo';
+  }
+  if (unit === 'INR_CR' && disp < 1) {
+    const lakhs = disp * 100;
     const rounded = lakhs >= 10 ? lakhs.toFixed(0) : lakhs.toFixed(1).replace(/\.0$/, '');
     return `₹${rounded}L/mo`;
   }
-  if (unit === 'USD_M' && monthlyVal < 1) {
-    return `$${Math.round(monthlyVal * 1000)}K/mo`;
+  if (unit === 'USD_M' && disp < 1) {
+    return `$${Math.round(disp * 1000)}K/mo`;
   }
-  return `${formatMoney(monthlyVal, unit, 1)}/mo`;
+  return `${formatMoney(monthlyCrVal, unit, 1, fxInrPerUsd)}/mo`;
 }
 
-function compactAxisLabel(val: number, unit: CurrencyUnit): string {
-  if (!Number.isFinite(val) || val <= 0) return '0';
+function compactAxisLabel(
+  crVal: number,
+  unit: CurrencyUnit,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
+  const disp = fromCr(crVal, unit, fxInrPerUsd);
+  if (!Number.isFinite(disp) || disp <= 0) return '0';
   if (unit === 'INR_CR') {
-    const rounded = val >= 10 ? Math.round(val) : Number(val.toFixed(1));
+    const rounded = disp >= 10 ? Math.round(disp) : Number(disp.toFixed(1));
     return `₹${formatNumber(rounded, 1, 'en-IN')}`;
   }
   if (unit === 'INR_LAKH') {
-    const rounded = val >= 10 ? Math.round(val) : Number(val.toFixed(1));
+    const rounded = disp >= 10 ? Math.round(disp) : Number(disp.toFixed(1));
     return `₹${formatNumber(rounded, 1, 'en-IN')}L`;
   }
-  return `$${formatNumber(val >= 10 ? Math.round(val) : Number(val.toFixed(1)), 1, 'en-US')}M`;
+  return `$${formatNumber(disp >= 10 ? Math.round(disp) : Number(disp.toFixed(1)), 1, 'en-US')}M`;
 }
 
-export function renderValuationLadderSvg(output: CheckOutput): string {
+export function renderValuationLadderSvg(
+  output: CheckOutput,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
   if (!output.validation.valid) {
     return `
       <svg class="vc-chart-svg" viewBox="0 0 540 270" role="img" aria-label="Valuation ladder chart awaiting valid inputs">
@@ -157,7 +174,7 @@ export function renderValuationLadderSvg(output: CheckOutput): string {
   const postVal = metrics.impliedPostMoney.value ?? 0;
   const nextVal = metrics.nextRoundPreMoney.value ?? 0;
   const deltaVal = Math.max(0, nextVal - postVal);
-  const stepLabel = `R1→R2: ${formatMultiple(input.stepUpMultiple, 1)} (+${formatMoney(deltaVal, unit)})`;
+  const stepLabel = `R1→R2: ${formatMultiple(input.stepUpMultiple, 1)} (+${formatMoney(deltaVal, unit, undefined, fxInrPerUsd)})`;
   const pillW = Math.min(210, Math.max(132, stepLabel.length * 7 + 18));
   const pillX = Math.min(532 - pillW, Math.max(60, Math.round(midCx - pillW / 2)));
 
@@ -167,7 +184,7 @@ export function renderValuationLadderSvg(output: CheckOutput): string {
       const cx = x + barW / 2;
       const h = b.value <= 0 ? 4 : Math.max(12, Math.round((b.value / maxVal) * maxBarH));
       const y = baselineY - h;
-      const formattedVal = formatMoney(b.value, unit);
+      const formattedVal = formatMoney(b.value, unit, undefined, fxInrPerUsd);
 
       return `
         <g>
@@ -181,7 +198,9 @@ export function renderValuationLadderSvg(output: CheckOutput): string {
     })
     .join('');
 
-  const ariaSummary = bars.map((b) => `${b.label} ${formatMoney(b.value, unit)}`).join(', ');
+  const ariaSummary = bars
+    .map((b) => `${b.label} ${formatMoney(b.value, unit, undefined, fxInrPerUsd)}`)
+    .join(', ');
 
   return `
     <svg class="vc-chart-svg" viewBox="0 0 540 270" role="img" aria-label="Valuation ladder: ${escapeXml(ariaSummary)}">
@@ -190,8 +209,8 @@ export function renderValuationLadderSvg(output: CheckOutput): string {
       <line x1="54" y1="${midY}" x2="522" y2="${midY}" stroke="#e5e5ea" stroke-dasharray="3 3" />
       <line x1="54" y1="${baselineY}" x2="522" y2="${baselineY}" stroke="#c7c7cc" />
 
-      <text x="48" y="${topY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal, unit))}</text>
-      <text x="48" y="${midY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal / 2, unit))}</text>
+      <text x="48" y="${topY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal, unit, fxInrPerUsd))}</text>
+      <text x="48" y="${midY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal / 2, unit, fxInrPerUsd))}</text>
       <text x="48" y="${baselineY + 4}" text-anchor="end" class="vc-svg-axis">0</text>
 
       <text x="58" y="20" text-anchor="start" class="vc-svg-group">THIS ROUND (R1)</text>
@@ -206,7 +225,10 @@ export function renderValuationLadderSvg(output: CheckOutput): string {
   `.trim();
 }
 
-export function renderRevenueBridgeSvg(output: CheckOutput): string {
+export function renderRevenueBridgeSvg(
+  output: CheckOutput,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
   if (!output.validation.valid) {
     return `
       <svg class="vc-chart-svg" viewBox="0 0 540 270" role="img" aria-label="Revenue bridge chart awaiting valid inputs">
@@ -278,15 +300,16 @@ export function renderRevenueBridgeSvg(output: CheckOutput): string {
 
   const postMult = metrics.impliedPostRevenueMultiple.value;
   const preMult = metrics.impliedPreRevenueMultiple.value;
-  const currTopLabel = currArr > 0 ? formatMoney(currArr, unit) : 'Unset';
-  const currSub1 = currArr > 0 ? compactMonthlyLabel(currArr / 12, unit) : 'Enter ARR above';
+  const currTopLabel = currArr > 0 ? formatMoney(currArr, unit, undefined, fxInrPerUsd) : 'Pre-revenue';
+  const currSub1 =
+    currArr > 0 ? compactMonthlyLabel(currArr / 12, unit, fxInrPerUsd) : 'DeepTech planner';
   const currSub2 =
     currArr > 0 && postMult !== null && preMult !== null
       ? `${formatMultiple(postMult, 1)} post · ${formatMultiple(preMult, 1)} pre`
-      : 'to see multiples';
+      : 'coming soon';
 
-  const reqTopLabel = formatMoney(reqArr, unit);
-  const reqSub1 = compactMonthlyLabel(reqMrr, unit);
+  const reqTopLabel = formatMoney(reqArr, unit, undefined, fxInrPerUsd);
+  const reqSub1 = compactMonthlyLabel(reqMrr, unit, fxInrPerUsd);
   const reqSub2 = `at ${formatMultiple(input.nextRoundMultiple, 1)} R2 ARR`;
 
   const gx = metrics.requiredGrowthMultiple.value;
@@ -295,7 +318,7 @@ export function renderRevenueBridgeSvg(output: CheckOutput): string {
   const bridgeTitle =
     gx !== null
       ? `${formatMultiple(gx, 1)} in ${formatNumber(input.monthsToNextRound, 0)} mo`
-      : 'Add ARR';
+      : 'Pre-revenue';
   const bridgePace =
     cagr !== null && cmgr !== null
       ? `${formatPercent(cagr, 0)}/yr CAGR · ${formatPercent(cmgr, 1)}/mo`
@@ -316,7 +339,7 @@ export function renderRevenueBridgeSvg(output: CheckOutput): string {
       topY + 4,
       Math.min(baselineY - 8, baselineY - Math.round((reachableTargetArr / maxVal) * maxBarH))
     );
-    const paceLabel = `Reachable ceiling: ${formatMoney(reachableTargetArr, unit)} (≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr)`;
+    const paceLabel = `Conservative ceiling: ${formatMoney(reachableTargetArr, unit, undefined, fxInrPerUsd)} (≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr)`;
     reachableMarkup = `
       <line x1="58" y1="20" x2="78" y2="20" stroke="#1b7a35" stroke-width="1.5" stroke-dasharray="4 3" />
       <text x="84" y="24" text-anchor="start" fill="#1b7a35" class="vc-svg-sub-pill">${escapeXml(paceLabel)}</text>
@@ -333,8 +356,8 @@ export function renderRevenueBridgeSvg(output: CheckOutput): string {
       <line x1="54" y1="${midY}" x2="522" y2="${midY}" stroke="#e5e5ea" stroke-dasharray="3 3" />
       <line x1="54" y1="${baselineY}" x2="522" y2="${baselineY}" stroke="#c7c7cc" />
 
-      <text x="48" y="${topY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal, unit))}</text>
-      <text x="48" y="${midY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal / 2, unit))}</text>
+      <text x="48" y="${topY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal, unit, fxInrPerUsd))}</text>
+      <text x="48" y="${midY + 4}" text-anchor="end" class="vc-svg-axis">${escapeXml(compactAxisLabel(maxVal / 2, unit, fxInrPerUsd))}</text>
       <text x="48" y="${baselineY + 4}" text-anchor="end" class="vc-svg-axis">0</text>
 
       ${reachableMarkup}
@@ -364,21 +387,28 @@ export function renderRevenueBridgeSvg(output: CheckOutput): string {
   `.trim();
 }
 
-export function renderFeasibleAskBarSvg(output: CheckOutput): string {
+export function renderFeasibleAskBarSvg(
+  output: CheckOutput,
+  fxInrPerUsd: number = DEFAULT_FX_INR_PER_USD
+): string {
   const { input, feasibleAskBand, unit } = output;
   if (!output.validation.valid || input.annualRevenue <= 0 || feasibleAskBand.stretchAsk <= 0) {
     return `
-      <svg class="vc-chart-svg vc-chart-svg--bar" viewBox="0 0 480 60" role="img" aria-label="Feasible ask band awaiting current revenue">
+      <svg class="vc-chart-svg vc-chart-svg--bar" viewBox="0 0 480 60" role="img" aria-label="Feasible ask band for revenue-stage rounds">
         <title>Feasible ask band</title>
         <rect x="1" y="1" width="478" height="58" rx="8" fill="#f3f3f3" stroke="#d2d2d7" />
-        <text x="240" y="34" text-anchor="middle" class="vc-svg-sub">Enter positive current revenue to plot your feasible ask range.</text>
+        <text x="240" y="34" text-anchor="middle" class="vc-svg-sub">Pre-revenue: DeepTech Round Planner (coming soon).</text>
       </svg>
     `.trim();
   }
 
-  const { ask, cashNeeded } = input;
+  const { ask } = input;
+  const effectiveBurnNeed =
+    (input.monthlyBurn ?? 0) > 0
+      ? (input.monthlyBurn ?? 0) * input.monthsToNextRound
+      : input.cashNeeded;
   const { reachableAsk, stretchAsk } = feasibleAskBand;
-  const maxVal = Math.max(ask, stretchAsk * 1.25, cashNeeded, 1);
+  const maxVal = Math.max(ask, stretchAsk * 1.25, effectiveBurnNeed, 1);
 
   const x0 = 16;
   const trackW = 448;
@@ -396,13 +426,13 @@ export function renderFeasibleAskBarSvg(output: CheckOutput): string {
   const xAsk = toX(ask);
   const askLabelX = Math.max(76, Math.min(404, xAsk));
 
-  const askLabel = `Your ask: ${formatMoney(ask, unit)}`;
+  const askLabel = `Your ask: ${formatMoney(ask, unit, undefined, fxInrPerUsd)}`;
 
   let burnMarkup = '';
-  if (cashNeeded > 0) {
-    const xBurn = toX(cashNeeded);
+  if (effectiveBurnNeed > 0) {
+    const xBurn = toX(effectiveBurnNeed);
     const burnLabelX = Math.max(66, Math.min(414, xBurn));
-    const burnText = `Burn floor: ${formatMoney(cashNeeded, unit)}`;
+    const burnText = `Burn floor: ${formatMoney(effectiveBurnNeed, unit, undefined, fxInrPerUsd)}`;
     burnMarkup = `
       <line x1="${xBurn}" y1="${trackY - 2}" x2="${xBurn}" y2="${trackY + trackH + 10}" stroke="#0066d6" stroke-width="2" />
       <text x="${burnLabelX}" y="74" text-anchor="middle" fill="#0066d6" class="vc-svg-sub-pill">${escapeXml(burnText)}</text>
@@ -410,7 +440,7 @@ export function renderFeasibleAskBarSvg(output: CheckOutput): string {
   }
 
   return `
-    <svg class="vc-chart-svg vc-chart-svg--bar" viewBox="0 0 480 86" role="img" aria-label="Feasible ask scale: ${escapeXml(askLabel)}, Reachable up to ${escapeXml(formatMoney(reachableAsk, unit))}, Stretch up to ${escapeXml(formatMoney(stretchAsk, unit))}">
+    <svg class="vc-chart-svg vc-chart-svg--bar" viewBox="0 0 480 86" role="img" aria-label="Feasible ask scale: ${escapeXml(askLabel)}, Conservative up to ${escapeXml(formatMoney(reachableAsk, unit, undefined, fxInrPerUsd))}, Stretch up to ${escapeXml(formatMoney(stretchAsk, unit, undefined, fxInrPerUsd))}">
       <title>Feasible ask scale vs. your ask</title>
       <rect x="${x0}" y="${trackY}" width="${Math.max(0, xReach - x0)}" height="${trackH}" rx="4" fill="#e8f7ec" stroke="#1b7a35" stroke-width="1" />
       <rect x="${xReach}" y="${trackY}" width="${Math.max(0, xStretch - xReach)}" height="${trackH}" fill="#fff4e0" stroke="#9a5800" stroke-width="1" />
@@ -440,7 +470,7 @@ export function renderMultipleShiftSvg(output: CheckOutput): string {
       <svg class="vc-chart-svg vc-chart-svg--mini-shift" viewBox="0 0 320 112" role="img" aria-label="Multiple shift chart awaiting current revenue">
         <title>Valuation multiple shift</title>
         <rect x="1" y="1" width="318" height="110" rx="8" fill="#f3f3f3" stroke="#d2d2d7" />
-        <text x="160" y="60" text-anchor="middle" class="vc-svg-sub">Enter current revenue to plot multiple shift.</text>
+        <text x="160" y="60" text-anchor="middle" class="vc-svg-sub">Pre-revenue: multiple shift needs ARR.</text>
       </svg>
     `.trim();
   }
@@ -496,7 +526,7 @@ export function renderCagrGaugeSvg(output: CheckOutput): string {
       <svg class="vc-chart-svg vc-chart-svg--mini-cagr" viewBox="0 0 320 112" role="img" aria-label="Required CAGR benchmark gauge awaiting current revenue">
         <title>Required CAGR benchmark gauge</title>
         <rect x="1" y="1" width="318" height="110" rx="8" fill="#f3f3f3" stroke="#d2d2d7" />
-        <text x="160" y="60" text-anchor="middle" class="vc-svg-sub">Enter current revenue to plot required CAGR.</text>
+        <text x="160" y="60" text-anchor="middle" class="vc-svg-sub">Pre-revenue: CAGR check needs ARR.</text>
       </svg>
     `.trim();
   }
@@ -523,20 +553,20 @@ export function renderCagrGaugeSvg(output: CheckOutput): string {
   const labelX = Math.max(58, Math.min(262, xPin));
 
   let pinColor = '#1b7a35';
-  let captionText = `Within ${formatPercent(reachCagr, 0)}/yr reachable CAGR`;
+  let captionText = `Within ${formatPercent(reachCagr, 0)}/yr conservative CAGR`;
   if (verdict.level === 'stretch' || (cagr > reachCagr && cagr <= stretchCagr)) {
     pinColor = '#9a5800';
     captionText = `Inside ${formatPercent(reachCagr, 0)} to ${formatPercent(stretchCagr, 0)}/yr stretch CAGR`;
   } else if (verdict.level === 'stiff' || cagr > stretchCagr) {
     pinColor = '#c4281c';
-    captionText = `${formatMultiple(cagr / reachCagr, 1)} above ${formatPercent(reachCagr, 0)}/yr reachable CAGR`;
+    captionText = `${formatMultiple(cagr / reachCagr, 1)} above ${formatPercent(reachCagr, 0)}/yr conservative CAGR`;
   }
 
   const pinLabel = `Your CAGR: ${formatPercent(cagr, 0)}/yr`;
 
   return `
     <svg class="vc-chart-svg vc-chart-svg--mini-cagr" viewBox="0 0 320 112" role="img" aria-label="${escapeXml(pinLabel)}, ${escapeXml(captionText)}">
-      <title>Required CAGR vs. reachable and stretch benchmarks</title>
+      <title>Required CAGR vs. conservative and stretch benchmarks</title>
       <text x="${labelX}" y="22" text-anchor="middle" fill="${pinColor}" class="vc-svg-sub-strong">${escapeXml(pinLabel)}</text>
 
       <rect x="${x0}" y="${trackY}" width="${Math.max(0, xReach - x0)}" height="${trackH}" rx="4" fill="#e8f7ec" stroke="#1b7a35" stroke-width="1" />

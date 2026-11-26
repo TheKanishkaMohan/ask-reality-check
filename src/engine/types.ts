@@ -39,6 +39,8 @@ export interface CheckInput {
   monthsToNextRound: number;
   /** Total cash needed from burn plan to reach the next round's milestone (0 if not set) */
   cashNeeded: number;
+  /** Optional monthly net burn in canonical ₹ Cr/mo (effective cash needed = monthlyBurn × monthsToNextRound) */
+  monthlyBurn?: number;
   /** Pre-money ESOP pool expansion required by investor, as % of post-money (0 if none) */
   esopTopUpPct: number;
   /** Optional equity % sold in prior round (R0) */
@@ -53,7 +55,8 @@ export type ValidationField =
   | keyof CheckInput
   | 'esopAndDilution'
   | 'priorDilutionPct'
-  | 'nextRoundDilutionPct';
+  | 'nextRoundDilutionPct'
+  | 'monthlyBurn';
 
 export interface ValidationIssue {
   field: ValidationField;
@@ -169,7 +172,7 @@ export interface AssumptionReference {
   id: string;
   parameter: string;
   defaultValue: string;
-  origin: 'VC Benchmark' | 'Tool Assumption';
+  origin: string;
   explanation: string;
 }
 

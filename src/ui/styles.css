@@ -584,6 +584,43 @@ h3 {
   border-color: var(--link);
 }
 
+.vc-toolbar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.vc-fx-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: #ffffff;
+  border: 1px solid var(--hairline-band);
+  border-radius: var(--r-pill);
+}
+
+.vc-fx-wrap[hidden] {
+  display: none;
+}
+
+.vc-fx-wrap label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.vc-fx-input.tkm-input {
+  width: 78px;
+  min-height: 30px;
+  padding: 2px 8px;
+  font-size: 13px;
+}
+
 .vc-toolbar-actions {
   display: flex;
   flex-wrap: wrap;
@@ -630,7 +667,7 @@ h3 {
 .vc-config-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   margin-bottom: 20px;
 }
 
@@ -638,6 +675,43 @@ h3 {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px 16px;
+}
+
+.vc-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.vc-preset-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vc-burn-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  align-items: end;
+  gap: 12px 18px;
+}
+
+.vc-burn-readout {
+  margin: 0;
+  padding: 9px 12px;
+  background: var(--bg-band);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-control);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.vc-burn-readout strong {
+  color: var(--text);
 }
 
 .vc-grid-2 {
@@ -1032,7 +1106,7 @@ h3 {
 
 .vc-verdict-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1107,13 +1181,78 @@ h3 {
   padding-bottom: 0;
 }
 
-.vc-verdict-foot {
+.vc-esop-note {
   margin: 0;
+  padding: 9px 12px;
+  background: var(--bg-band);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-control);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.vc-pre-rev-callout {
+  margin: 0;
+  padding: 10px 14px;
+  background: #eaf3ff;
+  border: 1px solid rgba(0, 102, 214, 0.25);
+  border-radius: var(--r-control);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.vc-verdict-foot-row {
   padding-top: 10px;
   border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vc-verdict-foot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vc-verdict-foot {
+  margin: 0;
   font-size: 12px;
   line-height: 1.4;
   color: var(--text-2);
+}
+
+.vc-source-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.vc-source-banner {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  background: var(--bg-band);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-control);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.vc-india-notes-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
 }
 
 /* ---------- visual charts row ---------- */
@@ -1227,6 +1366,10 @@ h3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.vc-signals--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .vc-tile {
@@ -1954,12 +2097,16 @@ details.trace[open] summary::before {
 
 /* ---------- responsive breakpoints ---------- */
 @media (max-width: 960px) {
-  .vc-grid-4 {
+  .vc-grid-4,
+  .vc-grid-3,
+  .vc-verdict-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .vc-burn-row,
   .vc-charts-grid,
   .vc-analysis-grid,
-  .vc-signals {
+  .vc-signals,
+  .vc-signals--two {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -2033,8 +2180,10 @@ details.trace[open] summary::before {
 
 @media (max-width: 520px) {
   .vc-grid-4,
+  .vc-grid-3,
   .vc-grid-2,
   .vc-signals,
+  .vc-signals--two,
   .vc-solver-controls,
   .site-footer__grid {
     grid-template-columns: minmax(0, 1fr);

@@ -1,6 +1,9 @@
 import {
+  DEFAULT_FX_INR_PER_USD,
   DEFAULT_VERDICT_BANDS,
   PRESET_SCENARIOS,
+  fromCr,
+  toCr,
   type CheckInput,
   type CurrencyUnit,
   type GoalSeekTarget,
@@ -8,6 +11,7 @@ import {
 
 export interface AppState {
   unit: CurrencyUnit;
+  fxInrPerUsd: number;
   activePresetId: string | null;
   input: CheckInput;
   goalSeekTarget: GoalSeekTarget;
@@ -16,6 +20,7 @@ export interface AppState {
 
 const PARAM_MAP = {
   unit: 'u',
+  fxInrPerUsd: 'fx',
   preset: 'p',
   ask: 'ask',
   dilutionPct: 'dil',
@@ -26,6 +31,7 @@ const PARAM_MAP = {
   nextRoundMultiple: 'mult',
   monthsToNextRound: 'm',
   cashNeeded: 'cash',
+  monthlyBurn: 'burn',
   esopTopUpPct: 'esop',
   priorDilutionPct: 'r0d',
   nextRoundDilutionPct: 'r2d',
@@ -45,6 +51,7 @@ export function getInitialState(): AppState {
   if (typeof window === 'undefined' || !window.location.search) {
     return {
       unit: defaultPreset.unit,
+      fxInrPerUsd: DEFAULT_FX_INR_PER_USD,
       activePresetId: defaultPreset.id,
       input: baseInput,
       goalSeekTarget: 'max_ask',
@@ -56,6 +63,7 @@ export function getInitialState(): AppState {
   if ([...params.keys()].length === 0) {
     return {
       unit: defaultPreset.unit,
+      fxInrPerUsd: DEFAULT_FX_INR_PER_USD,
       activePresetId: defaultPreset.id,
       input: baseInput,
       goalSeekTarget: 'max_ask',
@@ -86,6 +94,16 @@ export function getInitialState(): AppState {
       ? unitRaw
       : matchedPreset?.unit ?? 'INR_CR';
 
+  const fxParsed = parseNum(PARAM_MAP.fxInrPerUsd, DEFAULT_FX_INR_PER_USD);
+  const fxInrPerUsd = Number.isFinite(fxParsed) && fxParsed > 0 ? fxParsed : DEFAULT_FX_INR_PER_USD;
+
+  const parseMoneyCr = (key: string, canonicalFallback: number): number => {
+    const raw = params.get(key);
+    if (raw === null || raw.trim() === '') return canonicalFallback;
+    const n = Number(raw);
+    return Number.isFinite(n) ? toCr(n, unit, fxInrPerUsd) : canonicalFallback;
+  };
+
   const pricedRaw = params.get(PARAM_MAP.priorRaiseWasPriced);
   const priorRaiseWasPriced =
     pricedRaw === '0' || pricedRaw === 'false'
@@ -107,15 +125,16 @@ export function getInitialState(): AppState {
   const nextRoundDilutionPct = parseOptionalNum(PARAM_MAP.nextRoundDilutionPct);
 
   const input: CheckInput = {
-    ask: parseNum(PARAM_MAP.ask, seed.ask),
+    ask: parseMoneyCr(PARAM_MAP.ask, seed.ask),
     dilutionPct: parseNum(PARAM_MAP.dilutionPct, seed.dilutionPct),
-    annualRevenue: parseNum(PARAM_MAP.annualRevenue, seed.annualRevenue),
-    priorRaise: parseNum(PARAM_MAP.priorRaise, seed.priorRaise),
+    annualRevenue: parseMoneyCr(PARAM_MAP.annualRevenue, seed.annualRevenue),
+    priorRaise: parseMoneyCr(PARAM_MAP.priorRaise, seed.priorRaise),
     priorRaiseWasPriced,
     stepUpMultiple: parseNum(PARAM_MAP.stepUpMultiple, seed.stepUpMultiple),
     nextRoundMultiple: parseNum(PARAM_MAP.nextRoundMultiple, seed.nextRoundMultiple),
     monthsToNextRound: parseNum(PARAM_MAP.monthsToNextRound, seed.monthsToNextRound),
-    cashNeeded: parseNum(PARAM_MAP.cashNeeded, seed.cashNeeded),
+    cashNeeded: parseMoneyCr(PARAM_MAP.cashNeeded, seed.cashNeeded),
+    monthlyBurn: parseMoneyCr(PARAM_MAP.monthlyBurn, seed.monthlyBurn ?? 0),
     esopTopUpPct: parseNum(PARAM_MAP.esopTopUpPct, seed.esopTopUpPct),
     priorDilutionPct,
     nextRoundDilutionPct,
@@ -127,21 +146,23 @@ export function getInitialState(): AppState {
 
   const stillMatchesPreset =
     matchedPreset &&
-    unit === matchedPreset.unit &&
-    input.ask === matchedPreset.input.ask &&
-    input.dilutionPct === matchedPreset.input.dilutionPct &&
-    input.annualRevenue === matchedPreset.input.annualRevenue &&
-    input.priorRaise === matchedPreset.input.priorRaise &&
-    input.stepUpMultiple === matchedPreset.input.stepUpMultiple &&
-    input.nextRoundMultiple === matchedPreset.input.nextRoundMultiple &&
+    Math.abs(input.ask - matchedPreset.input.ask) <= 1e-9 &&
+    Math.abs(input.dilutionPct - matchedPreset.input.dilutionPct) <= 1e-9 &&
+    Math.abs(input.annualRevenue - matchedPreset.input.annualRevenue) <= 1e-9 &&
+    Math.abs(input.priorRaise - matchedPreset.input.priorRaise) <= 1e-9 &&
+    input.priorRaiseWasPriced === matchedPreset.input.priorRaiseWasPriced &&
+    Math.abs(input.stepUpMultiple - matchedPreset.input.stepUpMultiple) <= 1e-9 &&
+    Math.abs(input.nextRoundMultiple - matchedPreset.input.nextRoundMultiple) <= 1e-9 &&
     input.monthsToNextRound === matchedPreset.input.monthsToNextRound &&
-    input.cashNeeded === matchedPreset.input.cashNeeded &&
-    input.esopTopUpPct === matchedPreset.input.esopTopUpPct &&
+    Math.abs(input.cashNeeded - matchedPreset.input.cashNeeded) <= 1e-9 &&
+    Math.abs((input.monthlyBurn ?? 0) - (matchedPreset.input.monthlyBurn ?? 0)) <= 1e-9 &&
+    Math.abs(input.esopTopUpPct - matchedPreset.input.esopTopUpPct) <= 1e-9 &&
     input.priorDilutionPct === undefined &&
     (input.nextRoundDilutionPct === undefined || input.nextRoundDilutionPct === 20);
 
   return {
     unit,
+    fxInrPerUsd,
     activePresetId: stillMatchesPreset ? matchedPreset.id : null,
     input,
     goalSeekTarget,
@@ -154,9 +175,12 @@ export function buildQueryString(state: AppState): string {
   const base = defaultPreset.input;
   const { input } = state;
   const params = new URLSearchParams();
+  const fmtMoneyParam = (crVal: number): string => {
+    const displayed = fromCr(crVal, state.unit, state.fxInrPerUsd);
+    return String(Number(displayed.toPrecision(10)));
+  };
 
-  const matchesPreset = (p: (typeof PRESET_SCENARIOS)[number]): boolean =>
-    state.unit === p.unit &&
+  const matchesCanonicalPreset = (p: (typeof PRESET_SCENARIOS)[number]): boolean =>
     Math.abs(input.ask - p.input.ask) <= 1e-9 &&
     Math.abs(input.dilutionPct - p.input.dilutionPct) <= 1e-9 &&
     Math.abs(input.annualRevenue - p.input.annualRevenue) <= 1e-9 &&
@@ -166,33 +190,49 @@ export function buildQueryString(state: AppState): string {
     Math.abs(input.nextRoundMultiple - p.input.nextRoundMultiple) <= 1e-9 &&
     input.monthsToNextRound === p.input.monthsToNextRound &&
     Math.abs(input.cashNeeded - p.input.cashNeeded) <= 1e-9 &&
+    Math.abs((input.monthlyBurn ?? 0) - (p.input.monthlyBurn ?? 0)) <= 1e-9 &&
     Math.abs(input.esopTopUpPct - p.input.esopTopUpPct) <= 1e-9 &&
     input.priorDilutionPct === undefined &&
     (input.nextRoundDilutionPct === undefined || input.nextRoundDilutionPct === 20);
+
+  const isDefaultUnitAndFx =
+    state.unit === defaultPreset.unit &&
+    Math.abs(state.fxInrPerUsd - DEFAULT_FX_INR_PER_USD) <= 1e-9;
 
   const matchedPreset = state.activePresetId
     ? PRESET_SCENARIOS.find((p) => p.id === state.activePresetId)
     : undefined;
 
-  if (matchesPreset(defaultPreset)) {
+  if (matchesCanonicalPreset(defaultPreset) && isDefaultUnitAndFx) {
     // Keep the canonical root URL clean on default inputs
-  } else if (matchedPreset && matchesPreset(matchedPreset)) {
-    params.set(PARAM_MAP.preset, matchedPreset.id);
+  } else if (matchedPreset && matchesCanonicalPreset(matchedPreset)) {
+    if (matchedPreset.id !== defaultPreset.id) {
+      params.set(PARAM_MAP.preset, matchedPreset.id);
+    }
+    if (state.unit !== defaultPreset.unit) {
+      params.set(PARAM_MAP.unit, state.unit);
+    }
+    if (Math.abs(state.fxInrPerUsd - DEFAULT_FX_INR_PER_USD) > 1e-9) {
+      params.set(PARAM_MAP.fxInrPerUsd, String(Number(state.fxInrPerUsd.toFixed(4))));
+    }
   } else {
     if (state.unit !== defaultPreset.unit) {
       params.set(PARAM_MAP.unit, state.unit);
     }
+    if (Math.abs(state.fxInrPerUsd - DEFAULT_FX_INR_PER_USD) > 1e-9) {
+      params.set(PARAM_MAP.fxInrPerUsd, String(Number(state.fxInrPerUsd.toFixed(4))));
+    }
     if (Math.abs(input.ask - base.ask) > 1e-9) {
-      params.set(PARAM_MAP.ask, String(input.ask));
+      params.set(PARAM_MAP.ask, fmtMoneyParam(input.ask));
     }
     if (Math.abs(input.dilutionPct - base.dilutionPct) > 1e-9) {
       params.set(PARAM_MAP.dilutionPct, String(input.dilutionPct));
     }
     if (Math.abs(input.annualRevenue - base.annualRevenue) > 1e-9) {
-      params.set(PARAM_MAP.annualRevenue, String(Number(input.annualRevenue.toFixed(4))));
+      params.set(PARAM_MAP.annualRevenue, fmtMoneyParam(input.annualRevenue));
     }
     if (input.priorRaise > 0) {
-      params.set(PARAM_MAP.priorRaise, String(input.priorRaise));
+      params.set(PARAM_MAP.priorRaise, fmtMoneyParam(input.priorRaise));
       if (!input.priorRaiseWasPriced) {
         params.set(PARAM_MAP.priorRaiseWasPriced, '0');
       }
@@ -207,7 +247,10 @@ export function buildQueryString(state: AppState): string {
       params.set(PARAM_MAP.monthsToNextRound, String(input.monthsToNextRound));
     }
     if (input.cashNeeded > 0) {
-      params.set(PARAM_MAP.cashNeeded, String(input.cashNeeded));
+      params.set(PARAM_MAP.cashNeeded, fmtMoneyParam(input.cashNeeded));
+    }
+    if ((input.monthlyBurn ?? 0) > 0) {
+      params.set(PARAM_MAP.monthlyBurn, fmtMoneyParam(input.monthlyBurn ?? 0));
     }
     if (input.esopTopUpPct > 0) {
       params.set(PARAM_MAP.esopTopUpPct, String(input.esopTopUpPct));
