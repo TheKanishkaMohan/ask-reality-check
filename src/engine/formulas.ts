@@ -152,7 +152,7 @@ export function validateInput(input: CheckInput): ValidationResult {
   ) {
     errors.push({
       field: 'verdictBands',
-      message: 'Pricing bands must have 0 < Conservative ceiling < Stretch ceiling.',
+      message: 'Pricing band thresholds must have 0 < lower growth threshold < upper growth threshold.',
     });
   }
 
@@ -1022,13 +1022,23 @@ export function solveGoalSeek(
   };
 }
 
-function roundNiceAsk(v: number): number {
+const CLEAN_MANTISSAS = [1, 1.5, 2, 3, 4, 5, 6, 7.5, 10];
+
+function snapToCleanStep(v: number): number {
   if (!Number.isFinite(v) || v <= 0) return 0;
-  if (v >= 100) return Math.round(v / 5) * 5;
-  if (v >= 20) return Math.round(v);
-  if (v >= 5) return Math.round(v * 2) / 2;
-  if (v >= 1) return Math.round(v * 10) / 10;
-  return Number(v.toPrecision(2));
+  const exp = Math.floor(Math.log10(v));
+  const pow10 = Math.pow(10, exp);
+  const norm = v / pow10;
+  let best = CLEAN_MANTISSAS[0]!;
+  let bestDiff = Infinity;
+  for (const m of CLEAN_MANTISSAS) {
+    const diff = Math.abs(m - norm);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = m;
+    }
+  }
+  return Number((best * pow10).toPrecision(4));
 }
 
 export function computeAskDilutionHeatmap(input: CheckInput): AskDilutionHeatmap {
@@ -1082,47 +1092,34 @@ export function computeAskDilutionHeatmap(input: CheckInput): AskDilutionHeatmap
 
   const chosen: number[] = [a];
   const tryAddAsk = (cand: number): void => {
-    if (!Number.isFinite(cand) || cand <= 0 || chosen.length >= 5) return;
-    if (chosen.every((x) => Math.abs(x - cand) / Math.max(x, cand) >= 0.08)) {
-      chosen.push(cand);
+    const clean = snapToCleanStep(cand);
+    if (!Number.isFinite(clean) || clean <= 0 || chosen.length >= 5) return;
+    if (chosen.every((x) => Math.abs(x - clean) / Math.max(x, clean) >= 0.18)) {
+      chosen.push(clean);
     }
   };
 
   let priorityCandidates: number[];
   if (a > s * 1.15) {
-    priorityCandidates = [
-      roundNiceAsk(r * 0.75),
-      roundNiceAsk(r),
-      roundNiceAsk(s),
-      roundNiceAsk(a * 1.25),
-    ];
+    priorityCandidates = [r * 0.8, r, s, a * 1.4];
   } else if (a < r * 0.85) {
-    priorityCandidates = [
-      roundNiceAsk(a * 0.75),
-      roundNiceAsk(r),
-      roundNiceAsk(s),
-      roundNiceAsk(s * 1.25),
-    ];
+    priorityCandidates = [a * 0.75, r, s, s * 1.2];
   } else {
-    priorityCandidates = [
-      roundNiceAsk(r * 0.7),
-      roundNiceAsk(r),
-      roundNiceAsk((r + s) / 2),
-      roundNiceAsk(s),
-      roundNiceAsk(s * 1.25),
-    ];
+    priorityCandidates = [a * 0.75, r * 0.8, r, s, s * 1.2];
   }
 
   for (const cand of priorityCandidates) {
     tryAddAsk(cand);
   }
-  for (const mult of [0.5, 0.75, 1.25, 1.5, 1.75]) {
+  for (const mult of [0.75, 0.5, 1.5, 2.0, 0.35, 3.0]) {
     if (chosen.length >= 5) break;
-    tryAddAsk(roundNiceAsk(a * mult));
+    tryAddAsk(a * mult);
   }
-  for (const mult of [0.4, 0.65, 1.35, 1.65, 2.0]) {
+  for (const mult of [0.6, 1.25, 2.5, 0.25, 4.0]) {
     if (chosen.length >= 5) break;
-    tryAddAsk(Number((a * mult).toPrecision(3)));
+    if (chosen.every((x) => Math.abs(x - snapToCleanStep(a * mult)) > 1e-6)) {
+      tryAddAsk(a * mult);
+    }
   }
 
   const rowAsks = chosen.slice(0, 5).sort((x, y) => x - y);

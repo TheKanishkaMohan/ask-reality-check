@@ -63,24 +63,69 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
     await expect(page.locator('#nav-tools')).not.toHaveAttribute('open', '');
 
     await expect(page.locator('h1')).toHaveText('Valuation Check');
+    await expect(page.locator('.vc-hero-lead')).toHaveText(
+      'Enter your round. See whether the price is justifiable.'
+    );
     await expect(page.locator('.vc-credit-footnote')).toHaveText(
       'Calculations run inside your browser; nothing leaves your device. Thanks to Sajith Pai for inspiring this tool.'
     );
     await expect(page.locator('#download-xlsx-btn')).toHaveText('Download XLSX');
 
-    // 2. Results First & Default Scenario (₹20 Cr on ₹1 Cr/mo = ₹12 Cr ARR -> Conservative ~78%/yr)
-    const verdictBox = await page.locator('#verdict-box').boundingBox();
-    const configBox = await page.locator('.vc-config-card').boundingBox();
-    expect(verdictBox).not.toBeNull();
-    expect(configBox).not.toBeNull();
-    expect(verdictBox!.y).toBeLessThan(configBox!.y);
-    expect(verdictBox!.y).toBeLessThan(400);
+    // 2. Inputs First Layout (Configuration ABOVE Pricing check), On-this-page nav, "See your result ↓", Sticky Strip & Disclaimer
+    await expect(page.locator('.vc-jump-nav')).toContainText('On this page');
+    for (const label of ['Result', 'Ladder', 'Solver', 'Sensitivity', 'Rules', 'India notes']) {
+      await expect(page.locator('.vc-jump-nav .vc-jump-link', { hasText: label })).toBeVisible();
+    }
 
+    const configBox = await page.locator('#config-card').boundingBox();
+    const verdictBox = await page.locator('#verdict-box').boundingBox();
+    expect(configBox).not.toBeNull();
+    expect(verdictBox).not.toBeNull();
+    expect(configBox!.y).toBeLessThan(verdictBox!.y);
+
+    // Sticky result strip is hidden while inputs are in view
+    await expect(page.locator('#sticky-result-strip')).toBeHidden();
+    await expect(page.locator('#see-result-btn')).toHaveText('See your result ↓');
+
+    // Scroll down past #config-card so sticky strip appears and test clicking it
+    await page.locator('#see-result-btn').click();
+    await page.waitForTimeout(80);
+    await expect(page.locator('#sticky-result-strip')).toBeVisible();
+    await expect(page.locator('#sticky-badge')).toHaveText('Conservative');
+    await expect(page.locator('#sticky-summary')).toHaveText(
+      '· 2.4x growth in 18 mo · ₹100 Cr post'
+    );
+
+    // Clicking sticky strip jumps back to #verdict-box cleanly
+    await page.locator('#heatmap-card').scrollIntoViewIfNeeded();
+    await page.locator('#sticky-result-link').click();
+    const verdictAfterJump = await page.locator('#verdict-box').boundingBox();
+    expect(verdictAfterJump).not.toBeNull();
+    expect(Math.abs(verdictAfterJump!.y)).toBeLessThan(200);
+
+    // Scroll back to top for default desktop screenshot & checks
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect(page.locator('#sticky-result-strip')).toBeHidden();
+
+    // Check R0 panel badge is clean ("Optional", no "80% R1")
+    await expect(page.locator('#settings-summary-chip')).toHaveText('Optional');
+
+    // Check Pricing check card, headline, disclaimer placement, stats, ESOP note & thresholds
     await expect(page.locator('#verdict-box .vc-eyebrow')).toHaveText('Pricing check');
     await expect(page.locator('#vbadge')).toHaveText('Conservative');
     await expect(page.locator('#vh')).toHaveText(
       'Needs 2.4x revenue in 18 months to justify this price.'
     );
+    await expect(page.locator('#vdisclaimer')).toHaveText(
+      'Illustrative sanity check, not a valuation or advice.'
+    );
+    const vhBox = await page.locator('#vh').boundingBox();
+    const discBox = await page.locator('#vdisclaimer').boundingBox();
+    const statsBox = await page.locator('#verdict-stats').boundingBox();
+    expect(vhBox && discBox && statsBox).not.toBeNull();
+    expect(vhBox!.y).toBeLessThan(discBox!.y);
+    expect(discBox!.y).toBeLessThan(statsBox!.y);
+
     await expect(page.locator('#verdict-stats')).toContainText('78%/yr');
     await expect(page.locator('#verdict-stats')).toContainText('₹100 Cr');
     await expect(page.locator('#verdict-stats')).toContainText('Effective pre-money');
@@ -91,15 +136,31 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
     await expect(page.locator('#verdict-box')).toContainText('Rule of thumb · reviewed Nov 2026');
     await expect(page.locator('#verdict-box')).toContainText('Where these numbers come from:');
 
-    // Credibility & UI hygiene assertions on default view
-    const initialBodyText = await page.evaluate(() => document.body.innerText);
-    expect(initialBodyText).not.toContain('—');
-    expect(initialBodyText).not.toContain('VC Benchmark');
-    expect(initialBodyText).not.toContain('VC benchmark');
-    expect(initialBodyText).not.toContain('Tool Assumption');
-    expect(initialBodyText).not.toContain('Tool assumption');
-    expect(initialBodyText).not.toContain('Add revenue');
-    expect(initialBodyText).not.toContain('Enter revenue');
+    // Clean rounded sensitivity grid steps (15, 20, 30, 40, 50 Cr; no 42 or 53 Cr)
+    const hmRowHeaders = await page.locator('#heatmap-card tbody th.vc-hm-row-head').allInnerTexts();
+    const hmTextJoined = hmRowHeaders.join(' | ');
+    for (const expectedAsk of ['₹15 Cr', '₹20 Cr', '₹30 Cr', '₹40 Cr', '₹50 Cr']) {
+      expect(hmTextJoined).toContain(expectedAsk);
+    }
+    expect(hmTextJoined).not.toContain('₹42 Cr');
+    expect(hmTextJoined).not.toContain('₹53 Cr');
+
+    // Label clarity & hygiene assertions (never call CAGR conservative/stretch; zero em-dashes)
+    const initialBodyAndSvg = await page.evaluate(() => {
+      const text = document.body.innerText;
+      const svgText = Array.from(document.querySelectorAll('svg'))
+        .map((s) => (s.textContent || '') + ' ' + (s.getAttribute('aria-label') || ''))
+        .join(' ');
+      return `${text}\n${svgText}`;
+    });
+    expect(initialBodyAndSvg).not.toContain('—');
+    expect(initialBodyAndSvg).not.toContain('VC Benchmark');
+    expect(initialBodyAndSvg).not.toContain('VC benchmark');
+    expect(initialBodyAndSvg).not.toContain('Tool Assumption');
+    expect(initialBodyAndSvg).not.toContain('Tool assumption');
+    expect(initialBodyAndSvg).not.toContain('Add revenue');
+    expect(initialBodyAndSvg).not.toContain('Enter revenue');
+    expect(initialBodyAndSvg).not.toMatch(/(conservative|stretch)\s+(cagr|growth|ceiling)/i);
     expect(await page.locator('.vc-config-card .chip', { hasText: 'Assumption' }).count()).toBe(0);
 
     // Optional burn bar & burn signal card hidden when #burn is empty by default
@@ -107,11 +168,11 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
     await expect(page.locator('#burn-bar')).toBeHidden();
     await expect(page.locator('[data-metric-id="fundingGap"]')).toHaveCount(0);
 
-    // Capture desktop screenshot (above the fold shows Results First + Configuration)
+    // Capture desktop screenshot (above the fold shows framing, inputs + See your result button)
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: 'docs/screenshot.png', fullPage: false });
     await page.screenshot({
-      path: 'C:/Users/kanis/.gemini/antigravity/brain/babe7b45-2138-4629-8cfa-6fad6934b238/scratch/vc-desktop.png',
+      path: 'C:/Users/kanis/.gemini/antigravity/brain/babe7b45-2138-4629-8cfa-6fad6934b238/scratch/vc-v06-desktop.png',
       fullPage: false,
     });
 
@@ -200,10 +261,12 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
     await expect(page.locator('#mult')).toHaveValue('3.5');
     await expect(page.locator('#revenue-chart svg')).toContainText('₹57.1 Cr');
 
-    // 8. India notes drawer starts collapsed and shows FEMA / merchant banker / Draft 2026 rules / not legal advice
+    // 8. India notes drawer starts collapsed, displays "As of Nov 2026", and shows FEMA / merchant banker / Draft 2026 rules / not legal advice
     await expect(page.locator('#india-notes-drawer')).not.toHaveAttribute('open', '');
+    await expect(page.locator('#india-notes-drawer > summary')).toContainText('As of Nov 2026');
     await page.locator('#india-notes-drawer > summary').click();
     await expect(page.locator('#india-notes-drawer')).toHaveAttribute('open', '');
+    await expect(page.locator('#india-notes-drawer')).toContainText('As of Nov 2026');
     await expect(page.locator('#india-notes-drawer')).toContainText('certified fair valuation');
     await expect(page.locator('#india-notes-drawer')).toContainText('SEBI-registered merchant banker');
     await expect(page.locator('#india-notes-drawer')).toContainText('draft 2026');
@@ -258,7 +321,7 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
     const dlCr = await dlCrPromise;
     expect(dlCr.suggestedFilename()).toBe('valuation-check-20-cr.xlsx');
 
-    // 11. Strict CSP style check + em-dash check + mobile overflow check (390px and 360px)
+    // 11. Strict CSP style check + em-dash check + mobile overflow check (390px, 375px and 360px) + sticky strip on 375px
     const badStyles = await page.evaluate(() =>
       Array.from(document.querySelectorAll('[style]'))
         .filter((el) => (el.getAttribute('style') || '').trim().length > 0)
@@ -269,7 +332,7 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);
 
-    for (const width of [1280, 390, 360]) {
+    for (const width of [1280, 390, 375, 360]) {
       await page.setViewportSize({ width, height: 780 });
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth > document.documentElement.clientWidth
@@ -282,10 +345,31 @@ test.describe('Valuation Check v0.5 — Canonical Units, Results First, ESOP, Bu
       expect(gridOverflow).toBe(false);
     }
 
-    await page.setViewportSize({ width: 360, height: 780 });
+    // 375px mobile: inputs above results, sticky strip appears cleanly on scroll as single line
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.locator('button[data-id="b"]').click();
     await page.evaluate(() => window.scrollTo(0, 0));
+    const mConfigBox = await page.locator('#config-card').boundingBox();
+    const mVerdictBox = await page.locator('#verdict-box').boundingBox();
+    expect(mConfigBox!.y).toBeLessThan(mVerdictBox!.y);
     await page.screenshot({
-      path: 'C:/Users/kanis/.gemini/antigravity/brain/babe7b45-2138-4629-8cfa-6fad6934b238/scratch/vc-mobile.png',
+      path: 'C:/Users/kanis/.gemini/antigravity/brain/babe7b45-2138-4629-8cfa-6fad6934b238/scratch/vc-v06-mobile375.png',
+      fullPage: false,
+    });
+
+    await page.locator('#verdict-box').scrollIntoViewIfNeeded();
+    await expect(page.locator('#sticky-result-strip')).toBeVisible();
+    await expect(page.locator('#sticky-badge')).toHaveText('Stretch');
+    await expect(page.locator('#sticky-summary')).toContainText('3.6x growth in 18 mo · ₹150 Cr post');
+    const stickyBox = await page.locator('#sticky-result-strip').boundingBox();
+    expect(stickyBox).not.toBeNull();
+    expect(stickyBox!.height).toBeLessThanOrEqual(60);
+    const mobileStickyOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+    );
+    expect(mobileStickyOverflow).toBe(false);
+    await page.screenshot({
+      path: 'C:/Users/kanis/.gemini/antigravity/brain/babe7b45-2138-4629-8cfa-6fad6934b238/scratch/vc-v06-mobile375-sticky.png',
       fullPage: false,
     });
   });

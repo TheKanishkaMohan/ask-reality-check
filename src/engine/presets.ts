@@ -111,7 +111,7 @@ export const ASSUMPTION_REFERENCES: AssumptionReference[] = [
     defaultValue: '≤108%/yr and ≤192%/yr',
     origin: LABELS.ruleOfThumbTag,
     explanation:
-      'Tripling in 18 months (108%/yr CAGR) is conservative for strong startups. Growing 3x to 5x (108% to 192%/yr CAGR) is a stretch. Above 192%/yr CAGR is aggressive. Thresholds adjust automatically when you change months to R2.',
+      'Tripling in 18 months (108%/yr CAGR) is an ambitious but reachable growth hurdle for strong startups, so asks inside this threshold are priced as Conservative. Asks requiring 3x to 5x growth (108% to 192%/yr CAGR) are priced as Stretch, and asks above 192%/yr are priced as Aggressive. Growth thresholds adjust automatically when you change months to R2.',
   },
   {
     id: 'prior_and_esop',

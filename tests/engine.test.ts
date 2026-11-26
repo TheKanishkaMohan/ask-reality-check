@@ -269,12 +269,14 @@ describe('Share & Export — Markdown Summary, XLSX Workbook & URL State Seriali
 
     expect(md).toContain('# Valuation Check: Summary (₹ Cr)');
     expect(md).toContain('**Pricing check:** Needs 2.4x revenue in 18 months to justify this price.');
+    expect(md).toContain(`_${LABELS.resultDisclaimer}_`);
     expect(md).toContain('Rule of thumb · reviewed Nov 2026');
     expect(md).toContain('**Monthly Net Burn:**');
     expect(md).toContain('₹100 Cr');
     expect(md).not.toContain('—');
     expect(md).not.toContain('VC Benchmark');
     expect(md).not.toContain('Tool Assumption');
+    expect(md).not.toMatch(/(conservative|stretch)\s+(cagr|growth|ceiling)/i);
 
     const mdUsd = generateMarkdownSummary(presetA.input, 'USD_M', 'max_ask', 3.0, 90);
     expect(mdUsd).toContain('$M at ₹90/USD');
@@ -299,9 +301,12 @@ describe('Share & Export — Markdown Summary, XLSX Workbook & URL State Seriali
     expect(rawCr).toContain('<f>B16*B9</f><v>200</v>');
     expect(rawCr).toContain('<f>MAX(0,(B12*B11)-B4)</f><v>16</v>');
     expect(rawCr).toContain('Rule of thumb');
+    expect(rawCr).toContain(LABELS.resultDisclaimer);
+    expect(rawCr).toContain(LABELS.indiaNotesAsOf);
     expect(rawCr.toLowerCase()).not.toContain('sajith');
     expect(rawCr).not.toContain('VC Benchmark');
     expect(rawCr).not.toContain('Tool Assumption');
+    expect(rawCr).not.toMatch(/(conservative|stretch)\s+(cagr|growth|ceiling)/i);
     expect(buildXlsxFilename(presetA.input, 'INR_CR', 85)).toBe('valuation-check-20-cr.xlsx');
 
     // USD_M workbook scales inputs & cached outputs by 1 / (85 / 10)
@@ -406,15 +411,18 @@ describe('CAGR-Normalised Horizon Bands, Credibility Labels & Sector Benchmarks'
     expect(band18.reachableAsk).toBeLessThan(band24.reachableAsk);
   });
 
-  it('uses unified credibility labels and zero em-dashes across rules, benchmarks, and India notes', () => {
+  it('uses unified credibility labels, As of Nov 2026 India notes, and zero conservative/stretch CAGR confusion', () => {
     expect(ASSUMPTION_REFERENCES).toHaveLength(5);
     expect(SECTOR_MULTIPLE_BENCHMARKS.length).toBeGreaterThanOrEqual(4);
     expect(LABELS.indiaNotes.length).toBeGreaterThanOrEqual(4);
+    expect(LABELS.indiaNotesAsOf).toBe('As of Nov 2026');
+    expect(LABELS.resultDisclaimer).toBe('Illustrative sanity check, not a valuation or advice.');
 
     for (const r of ASSUMPTION_REFERENCES) {
       expect(r.origin).toBe(LABELS.ruleOfThumbTag);
       expect(r.parameter).not.toContain('—');
       expect(r.explanation).not.toContain('—');
+      expect(r.explanation).not.toMatch(/(conservative|stretch)\s+(cagr|growth|ceiling)/i);
     }
     for (const s of SECTOR_MULTIPLE_BENCHMARKS) {
       expect(s.p25).toBeLessThan(s.p50);
@@ -430,7 +438,17 @@ describe('CAGR-Normalised Horizon Bands, Credibility Labels & Sector Benchmarks'
 });
 
 describe('Ask vs. Dilution Sensitivity Heatmap & Founder Ownership Waterfall', () => {
-  it('computes a 5-row sensitivity grid spanning Conservative, Stretch, and Aggressive', () => {
+  it('computes clean rounded ask steps spanning Conservative, Stretch, and Aggressive while highlighting custom asks', () => {
+    const presetA = PRESET_SCENARIOS.find((p) => p.id === 'a')!;
+    const hmA = computeAskDilutionHeatmap(presetA.input);
+    expect(hmA.available).toBe(true);
+    expect(hmA.rows.map((r) => r.ask)).toEqual([15, 20, 30, 40, 50]);
+    expect(hmA.rows.find((r) => r.ask === 20)?.isCurrentAsk).toBe(true);
+
+    const customHm = computeAskDilutionHeatmap(makeInput({ ask: 22.5 }));
+    expect(customHm.rows.some((r) => r.ask === 22.5 && r.isCurrentAsk)).toBe(true);
+    expect(customHm.rows.some((r) => r.ask === 42 || r.ask === 53)).toBe(false);
+
     const presetC = PRESET_SCENARIOS.find((p) => p.id === 'c')!;
     const heatmap = computeAskDilutionHeatmap(presetC.input);
 
@@ -438,6 +456,7 @@ describe('Ask vs. Dilution Sensitivity Heatmap & Founder Ownership Waterfall', (
     expect(heatmap.dilutions).toEqual([15, 20, 25, 30]);
     expect(heatmap.rows).toHaveLength(5);
     expect(heatmap.rows.some((r) => r.ask === 50 && r.isCurrentAsk)).toBe(true);
+    expect(heatmap.rows.some((r) => r.ask === 42 || r.ask === 53)).toBe(false);
 
     const allCells = heatmap.rows.flatMap((r) => r.cells);
     const levels = new Set(allCells.map((c) => c.level));

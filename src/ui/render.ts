@@ -267,8 +267,19 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       <section class="section section--hero-compact">
         <div class="wrap">
           <h1>Valuation Check</h1>
+          <p class="vc-hero-lead">${escapeHtml(LABELS.introFraming)}</p>
         </div>
       </section>
+
+      <div class="vc-sticky-strip" id="sticky-result-strip" role="region" aria-label="Pinned pricing summary" hidden>
+        <div class="wrap vc-sticky-strip__inner">
+          <a href="#verdict-box" class="vc-sticky-strip__link" id="sticky-result-link">
+            <span class="chip chip--open vc-sticky-strip__badge" id="sticky-badge">${escapeHtml(LABELS.bands.reachable)}</span>
+            <span class="vc-sticky-strip__summary" id="sticky-summary"></span>
+            <span class="vc-sticky-strip__cta" aria-hidden="true"><span class="vc-hide-xs">Jump to result </span>↓</span>
+          </a>
+        </div>
+      </div>
 
       <section class="section band section--tight" aria-label="Valuation calculator">
         <div class="wrap">
@@ -293,29 +304,20 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
             </div>
           </div>
 
-          <section class="vc-results-stack" aria-label="Pricing check summary" aria-live="polite" id="results-top">
-            <div class="vc-card vc-verdict-card" id="verdict-box">
-              <div class="vc-card__head">
-                <p class="vc-eyebrow">${escapeHtml(LABELS.pricingCheckTitle)}</p>
-                <span class="chip chip--open" id="vbadge">${escapeHtml(LABELS.bands.reachable)}</span>
-              </div>
-              <h3 class="vc-verdict-title" id="vh"></h3>
-              <div class="vc-verdict-stats" id="verdict-stats"></div>
-              <p class="vc-esop-note" id="verdict-esop-note" hidden></p>
-              <p class="vc-pre-rev-callout" id="verdict-prerev-callout" hidden></p>
-              <ul class="vc-reasons" id="vreasons"></ul>
-              <div class="vc-verdict-foot-row">
-                <div class="vc-verdict-foot-meta">
-                  <p class="vc-verdict-foot" id="verdict-band-badge"></p>
-                  <span class="chip chip--rolling">${escapeHtml(LABELS.ruleOfThumbTag)}</span>
-                </div>
-                <p class="vc-source-note">${escapeHtml(LABELS.benchmarkSourceLine)}</p>
-              </div>
+          <nav class="vc-jump-nav" aria-label="On this page">
+            <span class="vc-jump-nav__label">On this page</span>
+            <div class="vc-jump-nav__links">
+              <a href="#verdict-box" class="vc-jump-link">Result</a>
+              <a href="#valuation-card" class="vc-jump-link">Ladder</a>
+              <a href="#solver-card" class="vc-jump-link">Solver</a>
+              <a href="#heatmap-card" class="vc-jump-link">Sensitivity</a>
+              <a href="#assumptions-drawer" class="vc-jump-link" data-open-target="#assumptions-drawer">Rules</a>
+              <a href="#india-notes-drawer" class="vc-jump-link" data-open-target="#india-notes-drawer">India notes</a>
             </div>
-          </section>
+          </nav>
 
           <div class="vc-config-stack">
-            <section class="vc-card vc-config-card" aria-label="Inputs">
+            <section class="vc-card vc-config-card" id="config-card" aria-label="Inputs">
               <div class="vc-card__head">
                 <div>
                   <p class="vc-eyebrow">Configuration: R1 &amp; R2</p>
@@ -456,6 +458,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                   Optional. Leave blank to hide burn check.
                 </p>
               </div>
+
+              <div class="vc-config-foot">
+                <a href="#verdict-box" id="see-result-btn" class="btn btn--primary btn--sm">See your result ↓</a>
+              </div>
             </section>
 
             <details class="tkm-accordion" id="settings-drawer">
@@ -566,9 +572,29 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
             </details>
           </div>
 
-          <section class="vc-results-stack" aria-label="Detailed analysis" aria-live="polite" id="results-panel">
+          <section class="vc-results-stack" aria-label="Results" aria-live="polite" id="results-panel">
+            <div class="vc-card vc-verdict-card" id="verdict-box">
+              <div class="vc-card__head">
+                <p class="vc-eyebrow">${escapeHtml(LABELS.pricingCheckTitle)}</p>
+                <span class="chip chip--open" id="vbadge">${escapeHtml(LABELS.bands.reachable)}</span>
+              </div>
+              <h3 class="vc-verdict-title" id="vh"></h3>
+              <p class="vc-result-disclaimer" id="vdisclaimer">${escapeHtml(LABELS.resultDisclaimer)}</p>
+              <div class="vc-verdict-stats" id="verdict-stats"></div>
+              <p class="vc-esop-note" id="verdict-esop-note" hidden></p>
+              <p class="vc-pre-rev-callout" id="verdict-prerev-callout" hidden></p>
+              <ul class="vc-reasons" id="vreasons"></ul>
+              <div class="vc-verdict-foot-row">
+                <div class="vc-verdict-foot-meta">
+                  <p class="vc-verdict-foot" id="verdict-band-badge"></p>
+                  <span class="chip chip--rolling">${escapeHtml(LABELS.ruleOfThumbTag)}</span>
+                </div>
+                <p class="vc-source-note">${escapeHtml(LABELS.benchmarkSourceLine)}</p>
+              </div>
+            </div>
+
             <div class="vc-charts-grid">
-              <div class="vc-card">
+              <div class="vc-card" id="valuation-card">
                 <div class="vc-card__head">
                   <p class="vc-eyebrow">Valuation ladder</p>
                   <small class="vc-hint">R1 Pre + R1 Ask = R1 Post → R2 Pre</small>
@@ -591,7 +617,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
             <div class="vc-signals" id="signals-strip"></div>
 
             <div class="vc-analysis-grid">
-              <div class="vc-card" aria-label="Goal-seek calculator">
+              <div class="vc-card" id="solver-card" aria-label="Goal-seek calculator">
                 <div class="vc-card__head">
                   <p class="vc-eyebrow">Goal-seek solver</p>
                 </div>
@@ -605,7 +631,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                       <label for="gs-target">Solve backwards for</label>
                     </div>
                     <select id="gs-target" class="tkm-select">
-                      <option value="max_ask">Max R1 ask for growth ceiling</option>
+                      <option value="max_ask">Max R1 ask for growth threshold</option>
                       <option value="required_revenue">Current ARR for this R1 ask</option>
                       <option value="required_dilution">R1 dilution for this ask &amp; ARR</option>
                     </select>
@@ -616,7 +642,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                       ${renderInfoTip(
                         'tip-gs-growth',
                         'Target max growth',
-                        'Maximum R1-to-R2 revenue growth multiple you think is realistic. Goal-Seek solves the largest R1 ask that stays within this ceiling.',
+                        'Maximum R1-to-R2 revenue growth multiple threshold you think is realistic. Goal-Seek solves the largest R1 ask that stays within this threshold.',
                         true
                       )}
                     </div>
@@ -634,7 +660,8 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
                     <p class="vc-eyebrow">Ask vs. dilution sensitivity</p>
                     <small class="vc-hint">Click any cell to apply R1 ask &amp; dilution.</small>
                   </div>
-                  <div class="vc-heatmap-legend" aria-label="Grid legend">
+                  <div class="vc-heatmap-legend" aria-label="Pricing band legend">
+                    <span class="vc-legend-label">Pricing:</span>
                     <span class="chip chip--open">${escapeHtml(LABELS.bands.reachable)}</span>
                     <span class="chip chip--soon">${escapeHtml(LABELS.bands.stretch)}</span>
                     <span class="chip chip--closed">${escapeHtml(LABELS.bands.stiff)}</span>
@@ -671,11 +698,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
               <summary>
                 <span class="tkm-accordion__title">${escapeHtml(LABELS.indiaNotesTitle)}</span>
                 <span class="tkm-accordion__right">
-                  <span class="chip chip--rolling">${escapeHtml(LABELS.indiaNotesTag)}</span>
+                  <span class="chip chip--rolling">${escapeHtml(LABELS.indiaNotesTag)} · ${escapeHtml(LABELS.indiaNotesAsOf)}</span>
                   <span class="tkm-accordion__plus" aria-hidden="true"></span>
                 </span>
               </summary>
               <div class="tkm-accordion__body tkm-accordion__body--pad">
+                <p class="vc-source-banner"><strong>${escapeHtml(LABELS.indiaNotesAsOf)}.</strong> Key Indian regulatory and valuation notes for equity rounds.</p>
                 <ul class="vc-india-notes-list" aria-label="India valuation notes">
                   ${indiaNotesHtml}
                 </ul>
@@ -775,11 +803,34 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
   const presetNoteEl = root.querySelector<HTMLElement>('#pnote')!;
   const burnReadoutEl = root.querySelector<HTMLElement>('#burn-cash-readout')!;
   const settingsSummaryChip = root.querySelector<HTMLElement>('#settings-summary-chip')!;
+  const configCardEl = root.querySelector<HTMLElement>('#config-card')!;
+  const stickyStripEl = root.querySelector<HTMLElement>('#sticky-result-strip')!;
+  const stickyBadgeEl = root.querySelector<HTMLElement>('#sticky-badge')!;
+  const stickySummaryEl = root.querySelector<HTMLElement>('#sticky-summary')!;
   const unitSwitcher = root.querySelector<HTMLElement>('#unit-switcher')!;
   const downloadXlsxBtn = root.querySelector<HTMLButtonElement>('#download-xlsx-btn')!;
   const sectorDrawer = root.querySelector<HTMLElement>('#sector-benchmarks-drawer')!;
   const heatmapWrap = root.querySelector<HTMLElement>('#heatmap-wrap')!;
   const navTools = root.querySelector<HTMLDetailsElement>('#nav-tools');
+
+  const syncStickyStrip = (): void => {
+    const rect = configCardEl.getBoundingClientRect();
+    stickyStripEl.hidden = rect.bottom > 0;
+  };
+  window.addEventListener('scroll', syncStickyStrip, { passive: true });
+  if (typeof IntersectionObserver !== 'undefined') {
+    const observer = new IntersectionObserver(() => syncStickyStrip(), { threshold: 0 });
+    observer.observe(configCardEl);
+  }
+
+  root.querySelectorAll<HTMLAnchorElement>('.vc-jump-link[data-open-target]').forEach((link) => {
+    link.addEventListener('click', () => {
+      const targetSel = link.getAttribute('data-open-target');
+      if (!targetSel) return;
+      const drawer = root.querySelector<HTMLDetailsElement>(targetSel);
+      if (drawer) drawer.open = true;
+    });
+  });
 
   if (navTools) {
     document.addEventListener('click', (e) => {
@@ -1153,21 +1204,12 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     } else if (state.input.priorDilutionPct !== undefined && state.input.priorDilutionPct > 0) {
       summaryParts.push(`R0 ${formatPercent(state.input.priorDilutionPct, 1)} dil.`);
     }
-    if (waterfall.valid) {
-      summaryParts.push(`Founders ${formatPercent(waterfall.founderPostR1Pct, 1)} R1`);
-    }
-    if (
-      state.input.priorRaise > 0 ||
-      state.input.priorDilutionPct !== undefined ||
-      (state.input.nextRoundDilutionPct !== undefined && state.input.nextRoundDilutionPct !== 20)
-    ) {
+    if (summaryParts.length > 0) {
       settingsSummaryChip.className = 'chip chip--primary';
       settingsSummaryChip.textContent = summaryParts.join(' · ');
     } else {
       settingsSummaryChip.className = 'chip chip--rolling';
-      settingsSummaryChip.textContent = waterfall.valid
-        ? `Optional · ${formatPercent(waterfall.founderPostR1Pct, 0)} R1`
-        : 'Optional';
+      settingsSummaryChip.textContent = 'Optional';
     }
 
     const r0DilSubEl = root.querySelector('#r0-dil-sub')!;
@@ -1238,6 +1280,20 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
     const badgeSpec = VERDICT_BADGE_MAP[output.verdict.level];
     vbadge.className = badgeSpec.cls;
     vbadge.textContent = badgeSpec.label;
+
+    stickyBadgeEl.className = `${badgeSpec.cls} vc-sticky-strip__badge`;
+    stickyBadgeEl.textContent = badgeSpec.label;
+    if (
+      output.validation.valid &&
+      state.input.annualRevenue > 0 &&
+      metrics.requiredGrowthMultiple.value !== null
+    ) {
+      stickySummaryEl.textContent = `· ${formatMultiple(metrics.requiredGrowthMultiple.value, 1)} growth in ${formatNumber(safeMonths, 0)} mo · ${metrics.impliedPostMoney.formattedValue} post`;
+    } else if (output.validation.valid) {
+      stickySummaryEl.textContent = `· ${metrics.impliedPostMoney.formattedValue} post · Pre-revenue`;
+    } else {
+      stickySummaryEl.textContent = '· Check input errors above';
+    }
 
     vh.textContent =
       output.validation.valid &&
@@ -1371,7 +1427,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       })
       .join('');
 
-    verdictFootEl.textContent = `Thresholds: ${LABELS.bands.reachable} ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr CAGR · ${LABELS.bands.stretch} ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr CAGR`;
+    verdictFootEl.textContent = LABELS.pricingThresholdsLine(
+      `${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr`,
+      `${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`
+    );
 
     // Render Visual Charts
     const valChartEl = root.querySelector<HTMLElement>('#valuation-chart')!;
@@ -1586,7 +1645,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       pills.push(`
         <div class="vc-band-pill" data-band="reachable">
           <div class="vc-band-pill__head">
-            <span class="bl">Max ask (≤${escapeHtml(formatMultiple(effectiveVerdictBands.reachableMax, 1))} · ${escapeHtml(formatPercent(effectiveVerdictBands.reachableCagrPct, 0))}/yr)</span>
+            <span class="bl">Max ask for ${escapeHtml(LABELS.bands.reachable)} pricing (≤${escapeHtml(formatMultiple(effectiveVerdictBands.reachableMax, 1))} · ${escapeHtml(formatPercent(effectiveVerdictBands.reachableCagrPct, 0))}/yr)</span>
             <span class="chip chip--open">${escapeHtml(LABELS.bands.reachable)}</span>
           </div>
           <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.reachableAsk, unit, undefined, fxInrPerUsd))}</span>
@@ -1595,7 +1654,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
       pills.push(`
         <div class="vc-band-pill" data-band="stretch">
           <div class="vc-band-pill__head">
-            <span class="bl">Max ask (≤${escapeHtml(formatMultiple(effectiveVerdictBands.stretchMax, 1))} · ${escapeHtml(formatPercent(effectiveVerdictBands.stretchCagrPct, 0))}/yr)</span>
+            <span class="bl">Max ask for ${escapeHtml(LABELS.bands.stretch)} pricing (≤${escapeHtml(formatMultiple(effectiveVerdictBands.stretchMax, 1))} · ${escapeHtml(formatPercent(effectiveVerdictBands.stretchCagrPct, 0))}/yr)</span>
             <span class="chip chip--soon">${escapeHtml(LABELS.bands.stretch)}</span>
           </div>
           <span class="bv">${escapeHtml(formatMoney(output.feasibleAskBand.stretchAsk, unit, undefined, fxInrPerUsd))}</span>
@@ -1785,7 +1844,10 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         'Required R2 ARR = ((Ask ÷ Dilution) × R2 Step-Up) ÷ R2 Multiple · CAGR = ((Required R2 ARR ÷ Current ARR) ^ (12 ÷ Months)) − 1',
         `Evaluated ${heatmap.rows.length} ask levels against ${heatmap.dilutions.map((d) => formatPercent(d, 1)).join(', ')} dilution over ${formatNumber(safeMonths, 0)} months.`,
         false,
-        `${LABELS.bands.reachable} ≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr · ${LABELS.bands.stretch} ≤${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`,
+        LABELS.pricingThresholdsLine(
+          `${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr`,
+          `${formatPercent(effectiveVerdictBands.stretchCagrPct, 0)}/yr`
+        ),
         openTraces
       );
     }
@@ -1834,6 +1896,7 @@ export function mountCheckerApp(root: HTMLElement, initialState: AppState): void
         openTraces
       );
     }
+    syncStickyStrip();
   }
 
   populateInputsFromState();

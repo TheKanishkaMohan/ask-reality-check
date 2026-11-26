@@ -339,7 +339,7 @@ export function renderRevenueBridgeSvg(
       topY + 4,
       Math.min(baselineY - 8, baselineY - Math.round((reachableTargetArr / maxVal) * maxBarH))
     );
-    const paceLabel = `Conservative ceiling: ${formatMoney(reachableTargetArr, unit, undefined, fxInrPerUsd)} (≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr)`;
+    const paceLabel = `Reachable ARR hurdle: ${formatMoney(reachableTargetArr, unit, undefined, fxInrPerUsd)} (≤${formatPercent(effectiveVerdictBands.reachableCagrPct, 0)}/yr)`;
     reachableMarkup = `
       <line x1="58" y1="20" x2="78" y2="20" stroke="#1b7a35" stroke-width="1.5" stroke-dasharray="4 3" />
       <text x="84" y="24" text-anchor="start" fill="#1b7a35" class="vc-svg-sub-pill">${escapeXml(paceLabel)}</text>
@@ -440,7 +440,7 @@ export function renderFeasibleAskBarSvg(
   }
 
   return `
-    <svg class="vc-chart-svg vc-chart-svg--bar" viewBox="0 0 480 86" role="img" aria-label="Feasible ask scale: ${escapeXml(askLabel)}, Conservative up to ${escapeXml(formatMoney(reachableAsk, unit, undefined, fxInrPerUsd))}, Stretch up to ${escapeXml(formatMoney(stretchAsk, unit, undefined, fxInrPerUsd))}">
+    <svg class="vc-chart-svg vc-chart-svg--bar" viewBox="0 0 480 86" role="img" aria-label="Feasible ask scale: ${escapeXml(askLabel)}, Conservative pricing up to ${escapeXml(formatMoney(reachableAsk, unit, undefined, fxInrPerUsd))}, Stretch pricing up to ${escapeXml(formatMoney(stretchAsk, unit, undefined, fxInrPerUsd))}">
       <title>Feasible ask scale vs. your ask</title>
       <rect x="${x0}" y="${trackY}" width="${Math.max(0, xReach - x0)}" height="${trackH}" rx="4" fill="#e8f7ec" stroke="#1b7a35" stroke-width="1" />
       <rect x="${xReach}" y="${trackY}" width="${Math.max(0, xStretch - xReach)}" height="${trackH}" fill="#fff4e0" stroke="#9a5800" stroke-width="1" />
@@ -553,20 +553,20 @@ export function renderCagrGaugeSvg(output: CheckOutput): string {
   const labelX = Math.max(58, Math.min(262, xPin));
 
   let pinColor = '#1b7a35';
-  let captionText = `Within ${formatPercent(reachCagr, 0)}/yr conservative CAGR`;
+  let captionText = `Within ${formatPercent(reachCagr, 0)}/yr reachable growth threshold`;
   if (verdict.level === 'stretch' || (cagr > reachCagr && cagr <= stretchCagr)) {
     pinColor = '#9a5800';
-    captionText = `Inside ${formatPercent(reachCagr, 0)} to ${formatPercent(stretchCagr, 0)}/yr stretch CAGR`;
+    captionText = `Between ${formatPercent(reachCagr, 0)} and ${formatPercent(stretchCagr, 0)}/yr growth thresholds`;
   } else if (verdict.level === 'stiff' || cagr > stretchCagr) {
     pinColor = '#c4281c';
-    captionText = `${formatMultiple(cagr / reachCagr, 1)} above ${formatPercent(reachCagr, 0)}/yr conservative CAGR`;
+    captionText = `${formatMultiple(cagr / reachCagr, 1)} above ${formatPercent(reachCagr, 0)}/yr reachable growth threshold`;
   }
 
   const pinLabel = `Your CAGR: ${formatPercent(cagr, 0)}/yr`;
 
   return `
     <svg class="vc-chart-svg vc-chart-svg--mini-cagr" viewBox="0 0 320 112" role="img" aria-label="${escapeXml(pinLabel)}, ${escapeXml(captionText)}">
-      <title>Required CAGR vs. conservative and stretch benchmarks</title>
+      <title>Required CAGR vs. growth thresholds</title>
       <text x="${labelX}" y="22" text-anchor="middle" fill="${pinColor}" class="vc-svg-sub-strong">${escapeXml(pinLabel)}</text>
 
       <rect x="${x0}" y="${trackY}" width="${Math.max(0, xReach - x0)}" height="${trackH}" rx="4" fill="#e8f7ec" stroke="#1b7a35" stroke-width="1" />

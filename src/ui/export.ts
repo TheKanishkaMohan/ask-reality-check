@@ -43,6 +43,7 @@ export function generateMarkdownSummary(
     `# Valuation Check: Summary (${unitLabel})`,
     ``,
     `**${LABELS.pricingCheckTitle}:** ${out.verdict.headline}`,
+    `_${LABELS.resultDisclaimer}_`,
     ``,
     `## 1. Inputs`,
     `- **R1 Ask (Raise):** ${formatMoney(input.ask, unit, 2, fxInrPerUsd)}`,
@@ -100,8 +101,8 @@ export function generateMarkdownSummary(
     lines.push(
       ``,
       `## 4. Goal-Seek & Feasible Ask Band`,
-      `- **Conservative Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.reachableMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit, 2, fxInrPerUsd)}`,
-      `- **Stretch Ask Ceiling (≤${formatMultiple(out.effectiveVerdictBands.stretchMax, 1)} growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit, 2, fxInrPerUsd)}`
+      `- **Max Ask for Conservative Pricing (≤${formatMultiple(out.effectiveVerdictBands.reachableMax, 1)} required growth):** ${formatMoney(out.feasibleAskBand.reachableAsk, unit, 2, fxInrPerUsd)}`,
+      `- **Max Ask for Stretch Pricing (≤${formatMultiple(out.effectiveVerdictBands.stretchMax, 1)} required growth):** ${formatMoney(out.feasibleAskBand.stretchAsk, unit, 2, fxInrPerUsd)}`
     );
     if (out.feasibleAskBand.priorRaiseBand) {
       lines.push(

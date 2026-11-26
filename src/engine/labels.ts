@@ -1,9 +1,13 @@
+export const REVIEWED_DATE = 'Nov 2026';
+
 export const LABELS = {
-  reviewedDate: 'Nov 2026',
-  ruleOfThumbTag: 'Rule of thumb · reviewed Nov 2026',
+  reviewedDate: REVIEWED_DATE,
+  ruleOfThumbTag: `Rule of thumb · reviewed ${REVIEWED_DATE}`,
   benchmarkSourceLine:
     'Where these numbers come from: common early-stage India and global VC round-sizing heuristics (20 to 25% dilution, 2x step-up, 15 to 18 month runway), not formal market data.',
+  introFraming: 'Enter your round. See whether the price is justifiable.',
   pricingCheckTitle: 'Pricing check',
+  resultDisclaimer: 'Illustrative sanity check, not a valuation or advice.',
   bands: {
     reachable: 'Conservative',
     stretch: 'Stretch',
@@ -11,6 +15,8 @@ export const LABELS = {
     invalid: 'Check inputs',
     incomplete: 'Pre-revenue',
   },
+  pricingThresholdsLine: (reachCagrStr: string, stretchCagrStr: string): string =>
+    `Pricing bands: Conservative (≤${reachCagrStr} required CAGR) · Stretch (${reachCagrStr} to ${stretchCagrStr}) · Aggressive (>${stretchCagrStr})`,
   headline: (growthStr: string, monthsStr: string): string =>
     `Needs ${growthStr} revenue in ${monthsStr} months to justify this price.`,
   preRevenueHeadline: 'Revenue multiples do not fit pre-revenue rounds.',
@@ -28,6 +34,7 @@ export const LABELS = {
     `The ${pctStr} ESOP pool (${poolMoneyStr}) comes out of your ${preMoneyStr} headline pre-money, leaving existing holders an effective pre-money of ${effPreMoneyStr} while new R1 investors keep ${dilStr}.`,
   indiaNotesTitle: 'India notes',
   indiaNotesTag: 'FEMA & Fair Value',
+  indiaNotesAsOf: `As of ${REVIEWED_DATE}`,
   indiaNotes: [
     {
       title: 'Sizing heuristic only',
